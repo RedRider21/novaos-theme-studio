@@ -1,0 +1,35 @@
+{
+  "format": "novatheme/2",
+  "meta": {
+    "id": "nova-list",
+    "name": "Nova List",
+    "author": "NovaOS",
+    "version": "1.0.0",
+    "base": "dark"
+  },
+  "layout": {
+    "id": "list",
+    "params": { "search": true, "reorder": true }
+  },
+  "colors": {
+    "bg": "#0b0f17",
+    "surface": "#1a2130",
+    "surface-2": "#232c3d",
+    "text": "#e8ecf4",
+    "text-dim": "#9aa4b8",
+    "accent": "#35c759",
+    "accent-2": "#a663ff"
+  },
+  "shape": {
+    "radius": 16,
+    "radiusSm": 12,
+    "iconStyle": "filled"
+  },
+  "wallpaper": {
+    "type": "gradient",
+    "value": "radial-gradient(120% 80% at 50% 0%, rgba(53,199,89,.28) 0%, transparent 60%)"
+  },
+  "typography": {
+    "textScale": 100
+  }
+}

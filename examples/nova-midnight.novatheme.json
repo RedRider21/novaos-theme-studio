@@ -1,0 +1,48 @@
+{
+  "format": "novatheme/1",
+  "meta": {
+    "id": "nova-midnight",
+    "name": "Nova Midnight",
+    "author": "NovaOS",
+    "version": "1.0.0",
+    "base": "dark"
+  },
+  "colors": {
+    "bg": "#0b0f17",
+    "bg-2": "#121826",
+    "surface": "#1a2130",
+    "surface-2": "#232c3d",
+    "text": "#e8ecf4",
+    "text-dim": "#9aa4b8",
+    "accent": "#6d8bff",
+    "accent-2": "#a663ff",
+    "danger": "#ff5b6e",
+    "ok": "#35d0a0"
+  },
+  "shape": {
+    "radius": 22,
+    "radiusSm": 14,
+    "iconStyle": "filled"
+  },
+  "wallpaper": {
+    "type": "gradient",
+    "value": "radial-gradient(130% 80% at 50% 0%, rgba(60,95,165,.55) 0%, transparent 58%)"
+  },
+  "icons": {
+    "pack": "bootstrap",
+    "shape": "circle",
+    "map": {
+      "camera": { "type": "emoji", "value": "📷" }
+    }
+  },
+  "sounds": {
+    "ringtone": { "type": "builtin", "value": "Nova" },
+    "notif": { "type": "builtin", "value": "Goccia" },
+    "alarm": { "type": "sequence", "value": [[740, 0.24], [0, 0.1], [740, 0.24], [0, 0.14]] }
+  },
+  "typography": {
+    "textScale": 100,
+    "font": "system",
+    "weight": "normal"
+  }
+}
