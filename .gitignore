@@ -1,6 +1,0 @@
-node_modules/
-*.log
-.DS_Store
-
-# build statica rigenerabile (./build-static.sh)
-dist/
