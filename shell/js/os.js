@@ -23,12 +23,15 @@ const OS = (() => {
   // Persistenza doppia: SharedPreferences native (se presente il bridge) + localStorage.
   // La localStorage della WebView su origine file:// NON è garantita tra i riavvii dell'app;
   // le preferenze native lo sono. Scrive su entrambe; legge prima dal nativo con fallback.
-  const _prefs = () => window.NovaNative || {};
+  // NB() è l'accessore difensivo al ponte (js/bridge.js): il ponte vero inoltra alla
+  // WebView e, sotto GeckoView, leggerà dalla cache. Se bridge.js non fosse caricato
+  // degrada verso la sola localStorage, invece di far esplodere la shell.
+  const NB = () => window.NovaBridge || { has: () => false, prefGet: () => null, prefKeys: () => null, prefSet() {}, prefDel() {} };
   const store = {
     get(k, d) {
       try {
         let v = null;
-        if (_prefs().prefGet) { try { v = _prefs().prefGet("nova:"+k); } catch {} }
+        try { v = NB().prefGet("nova:"+k); } catch {}
         if (v === null || v === undefined) v = localStorage.getItem("nova:"+k);
         return (v === null || v === undefined) ? d : JSON.parse(v);
       } catch { return d; }
@@ -36,24 +39,23 @@ const OS = (() => {
     set(k, v) {
       const s = JSON.stringify(v);
       try { localStorage.setItem("nova:"+k, s); } catch {}
-      try { if (_prefs().prefSet) _prefs().prefSet("nova:"+k, s); } catch {}
+      try { NB().prefSet("nova:"+k, s); } catch {}
     },
     del(k) {
       try { localStorage.removeItem("nova:"+k); } catch {}
-      try { if (_prefs().prefDel) _prefs().prefDel("nova:"+k); } catch {}
+      try { NB().prefDel("nova:"+k); } catch {}
     },
   };
   // migrazione una tantum: porta nelle preferenze native le impostazioni finora salvate
   // solo in localStorage (così non si perdono al primo riavvio dopo l'aggiornamento).
   (function migratePrefs() {
-    const nn = window.NovaNative;
-    if (!nn || !nn.prefSet || !nn.prefGet) return;
+    if (!NB().has("prefGet") || !NB().has("prefSet")) return;
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
         if (k && k.indexOf("nova:") === 0) {
-          let ex = null; try { ex = nn.prefGet(k); } catch {}
-          if (ex === null || ex === undefined) { try { nn.prefSet(k, localStorage.getItem(k)); } catch {} }
+          let ex = null; try { ex = NB().prefGet(k); } catch {}
+          if (ex === null || ex === undefined) { try { NB().prefSet(k, localStorage.getItem(k)); } catch {} }
         }
       }
     } catch {}
@@ -908,6 +910,15 @@ const OS = (() => {
     NovaApps.dock.forEach((a, i) => dock.appendChild(iconEl(a, i)));
   }
 
+  /**
+   * Il browser nativo annuncia un'app appena aggiunta alla home (una pagina installata o
+   * una scorciatoia: v. MainActivity.appInstallate). L'elenco è già quello condiviso — la
+   * lettura delle preferenze passa sempre di lì — quindi basta ridisegnare la home perché
+   * l'icona nuova ci sia. Se la home non è a schermo il disegno è lo stesso lavoro di
+   * niente, e alla prossima apertura l'app c'è comunque.
+   */
+  window.__novaAppInstallate = () => { try { renderHome(); } catch (e) {} };
+
   // applica un ordine app (da un tema .novatheme, layout.order): imposta l'ordine del
   // launcher Lista e ricostruisce la home a griglia disponendo le app in quell'ordine
   // (le app del dock restano nel dock). Le app non elencate vanno in coda.
@@ -1223,15 +1234,11 @@ const OS = (() => {
     // web app sul device: apri nel browser nativo a schermo intero. Così i siti che
     // vietano l'incorporamento in iframe (WhatsApp Web, Telegram Web, banche, Google…)
     // si aprono davvero, invece di restare bianchi.
-    if (a.web && window.NovaNative && window.NovaNative.openBrowser) {
-      try { window.NovaNative.openBrowser(a.url); return; } catch (e) {}
-    }
+    if (a.web && NB().cmd("openBrowser", a.url)) return;
     // Browser: sul device apre direttamente il browser nativo (clone Chrome, schede,
     // preferiti, download) — lo stesso che apre le web app. In emulatore (nessun
     // bridge) resta l'anteprima interna in-app come ripiego.
-    if (a.id === "browser" && window.NovaNative && window.NovaNative.openBrowser) {
-      try { window.NovaNative.openBrowser(""); return; } catch (e) {}
-    }
+    if (a.id === "browser" && NB().cmd("openBrowser", "")) return;
     clearIntervals(); cleanupApp();
     currentApp = id;
     const frame = $("#app-frame");
@@ -1355,8 +1362,9 @@ const OS = (() => {
   // vibrazione REALE: bridge nativo se presente, altrimenti Web Vibration API
   function vibrate(pattern) {
     if (!state.vibrate) return;
-    if (window.NovaNative && window.NovaNative.vibrate) window.NovaNative.vibrate(Array.isArray(pattern)?pattern.reduce((a,b)=>a+b,0):pattern);
-    else if (navigator.vibrate) navigator.vibrate(pattern);
+    if (!NB().cmd("vibrate", Array.isArray(pattern)?pattern.reduce((a,b)=>a+b,0):pattern)) {
+      if (navigator.vibrate) navigator.vibrate(pattern);
+    }
   }
 
   // suono reale (WebAudio) con volume 0..1; usato da notifiche e sveglia.
@@ -1457,19 +1465,44 @@ const OS = (() => {
       if (state.bubbles && !screens.lock.classList.contains("active")) showBubble(n); }
   }
 
-  // Condivisione unificata usabile da ogni app: immagine (data URL) e/o testo/URL.
+  // Condivisione unificata usabile da ogni app: immagine (data URL), file, testo/URL,
+  //  e più file insieme (opts.files).
   //  Ordine di preferenza: bridge nativo Android (affidabile nella WebView) →
   //  Web Share API → appunti (clipboard) come ripiego. Ritorna una Promise.
-  //  Uso: os.share({ image:dataUrl }) oppure os.share({ title, text, url }).
+  //  Uso: os.share({ image:dataUrl }) oppure os.share({ file:{data,name} })
+  //       oppure os.share({ files:[{data,name}, …] }) oppure os.share({ title, text, url }).
   async function share(opts) {
     opts = opts || {};
-    const N = window.NovaNative;
     const title = opts.title || "NovaOS";
     const url = opts.url || "";
     const text = [opts.text, url].filter(Boolean).join(url && opts.text ? "\n" : "");
+    // Più file in una volta sola. Non è una comodità: il nativo apre un chooser per
+    // ogni CHIAMATA, quindi condividere N file chiamando share N volte significa N
+    // schermate di scelta in fila — e per chi guarda, «la condivisione multipla non
+    // la esegue». Qui si manda un elenco solo e la scelta è una sola.
+    if (opts.files && opts.files.length) {
+      const elenco = opts.files.filter(f => f && f.data)
+        .map(f => ({ data:f.data, name:f.name || "novaos" }));
+      if (!elenco.length) return false;
+      if (elenco.length === 1) return share(Object.assign({}, opts, { files:null, file:elenco[0] }));
+      // Un solo argomento, di tipo stringa: l'elenco in JSON. Passare un array
+      // significherebbe attraversare il ponte con argomenti di tipi diversi, che è
+      // il punto in cui i comandi spariscono in silenzio (v. background.js).
+      if (NB().cmd("shareFiles", JSON.stringify(elenco))) return true;
+      try {
+        const files = [];
+        for (const f of elenco) {
+          const blob = await (await fetch(f.data)).blob();
+          files.push(new File([blob], f.name, { type: blob.type || "application/octet-stream" }));
+        }
+        if (navigator.canShare && navigator.canShare({ files })) { await navigator.share({ files, title }); return true; }
+      } catch {}
+      notify({ app: opts.app || "settings", title: "Condivisione", text: "Aggiorna l'app per condividere più file." });
+      return false;
+    }
     // Immagine: preferisci il bridge nativo, poi Web Share con file.
     if (opts.image) {
-      if (N && N.shareImage) { try { N.shareImage(opts.image); return true; } catch {} }
+      if (NB().cmd("shareImage", opts.image)) return true;
       try {
         const blob = await (await fetch(opts.image)).blob();
         const file = new File([blob], (opts.filename || "novaos") + (/(png)/.test(blob.type) ? ".png" : ".jpg"), { type: blob.type || "image/jpeg" });
@@ -1479,7 +1512,7 @@ const OS = (() => {
     }
     // File generico (audio, documento…) da un data URL.
     if (opts.file && opts.file.data) {
-      if (N && N.shareFile) { try { N.shareFile(opts.file.data, opts.file.name || "novaos"); return true; } catch {} }
+      if (NB().cmd("shareFile", opts.file.data, opts.file.name || "novaos")) return true;
       try {
         const blob = await (await fetch(opts.file.data)).blob();
         const file = new File([blob], opts.file.name || "novaos", { type: blob.type || "application/octet-stream" });
@@ -1489,7 +1522,7 @@ const OS = (() => {
       return false;
     }
     if (text) {
-      if (N && N.shareText) { try { N.shareText(text); return true; } catch {} }
+      if (NB().cmd("shareText", text)) return true;
       try { if (navigator.share) { await navigator.share({ title, text: opts.text || title, url: url || undefined }); return true; } } catch (e) { if (e && e.name === "AbortError") return false; }
       try { await navigator.clipboard.writeText(text); notify({ app: opts.app || "settings", title: "Condivisione", text: "Copiato negli appunti." }); return true; } catch {}
     }
@@ -1550,11 +1583,18 @@ const OS = (() => {
   function pulse() { document.querySelectorAll("[data-statusbar] .sb-left").forEach(e => e.animate([{opacity:1},{opacity:.3},{opacity:1}], {duration:600})); }
 
   // ---- ponte sensori nativi (presente solo dentro l'app NovaOS) ----
-  const NN = () => window.NovaNative || {};
-  const hasNativeSensors = () => !!(window.NovaNative && window.NovaNative.sensorStates);
-  function readNativeSensors() { try { return hasNativeSensors() ? JSON.parse(NN().sensorStates()) : null; } catch { return null; } }
+  const hasNativeSensors = () => NB().has("sensorStates");
+  function readNativeSensors() { try { const j = NB().sensorStates(); return j ? JSON.parse(j) : null; } catch { return null; } }
   function syncQuickSensors() { const ns = readNativeSensors(); if (!ns) return;
-    ["wifi","bt","nfc","location","airplane"].forEach(k => { if (k in ns) state[k] = ns[k]; }); }
+    // mobileData e torch sono qui come gli altri, e non per simmetria: senza,
+    // l'interruttore «Dati» e quello «Torcia» restavano l'unico pezzo della tendina
+    // a mostrare ciò che la shell credeva invece di ciò che il telefono ha davanti.
+    // Il nativo li manda entrambi: mobileData da sempre, torch da quando la torcia
+    // è osservata con un callback (CameraManager.TorchCallback), perché la torcia
+    // si accende anche da fuori e uno stato che non si aggiorna è una bugia.
+    // Una chiave assente non è «spento»: `k in ns` la salta e il valore della shell
+    // resta — è il caso di un dispositivo senza torcia.
+    ["wifi","bt","nfc","location","airplane","mobileData","torch"].forEach(k => { if (k in ns) state[k] = ns[k]; }); }
 
   // ============================================================
   //  Aggiornamenti di sistema (OTA)
@@ -1566,7 +1606,7 @@ const OS = (() => {
   // ============================================================
   const Updater = (() => {
     const RAW = "https://raw.githubusercontent.com/RedRider21/NovaOS/main/shell/version.json";
-    const appInfo = () => { try { return JSON.parse(NN().appVersion()); } catch { return null; } };
+    const appInfo = () => { try { const j = NB().appVersion(); return j ? JSON.parse(j) : null; } catch { return null; } };
     let last = null;   // ultimo esito del controllo
 
     async function localInfo() {
@@ -1631,29 +1671,32 @@ const OS = (() => {
     const RAWBASE = "https://raw.githubusercontent.com/RedRider21/NovaOS/main/shell/";
     // scarica i file della nuova shell nella staging nativa; true se tutti scritti
     async function downloadShell(files) {
-      try { NN().shellStageBegin(); } catch { return false; }
+      if (!NB().cmd("shellStageBegin")) return false;
       for (const rel of files) {
         const r = await fetch(RAWBASE + rel + "?t=" + Date.now(), { cache:"no-store" });
         if (!r.ok) return false;
         const b64 = toBase64(await r.arrayBuffer());
-        let ok = false; try { ok = NN().shellWrite(rel, b64); } catch {}
-        if (!ok) return false;
+        // await: oggi il ponte risponde subito (booleano), sotto GeckoView sarà una
+        // richiesta/risposta. `!== true` è identico a `!ok` con un booleano vero, ma
+        // non fa passare un esito ancora ignoto (null/undefined) — quello brickerebbe
+        // la shell al commit successivo.
+        let ok = false; try { ok = await NB().shellWrite(rel, b64); } catch {}
+        if (ok !== true) return false;
       }
       return true;
     }
     async function apply() {
       const info = last || await check();
-      const nn = window.NovaNative;
       // 1) AGGIORNAMENTO SOLO INTERFACCIA (shell) SENZA APK: se il bridge lo supporta e la
       //    build nativa installata è sufficiente per la nuova shell (minNative). La parte
       //    nativa (bridge Java) resta invariata: si aggiornano solo HTML/CSS/JS.
       const nativeOk = !info.minNative || (info.nativeBuild >= info.minNative);
-      if (nn && nn.shellWrite && nn.shellCommit && info.files.length && nativeOk) {
+      if (NB().has("shellWrite") && NB().has("shellCommit") && info.files.length && nativeOk) {
         try {
           if (await downloadShell(info.files)) {
             store.set("updAvailable", "");
-            let done = false; try { done = nn.shellCommit(); } catch {}
-            if (done) return { mode:"shell" };   // il bridge ricarica l'interfaccia
+            let done = false; try { done = await NB().shellCommit(); } catch {}
+            if (done === true) return { mode:"shell" };   // il bridge ricarica l'interfaccia
           }
         } catch {}
         // se qualcosa va storto si prosegue col fallback APK (nessun rischio: la shell
@@ -1661,9 +1704,9 @@ const OS = (() => {
       }
       // 2) dispositivo: installazione APK nativa (serve quando cambia il codice nativo),
       //    con fallback all'apertura del download nel browser
-      if (nn && info.apk) {
-        if (nn.installUpdate) { try { nn.installUpdate(info.apk); return { mode:"apk" }; } catch {} }
-        if (nn.openBrowser)   { try { nn.openBrowser(info.apk);   return { mode:"browser" }; } catch {} }
+      if (info.apk) {
+        if (NB().cmd("installUpdate", info.apk)) return { mode:"apk" };
+        if (NB().cmd("openBrowser", info.apk))   return { mode:"browser" };
       }
       // 3) web/PWA: auto-aggiornamento reale (svuota cache + aggiorna service worker + reload)
       try {
@@ -1731,24 +1774,48 @@ const OS = (() => {
       set("brightness", v);
     };
   }
-  function quickTap(el, native) {
+  async function quickTap(el, native) {
     const k = el.dataset.q, isSensor = el.dataset.sensor === "1", act = el.dataset.act;
     if (act) { quickAct(act, k, el); return; }
     if (isSensor && native) {
-      let applied = false;
-      try { const fn = SETFN[k]; if (fn && NN()[fn]) applied = NN()[fn](!state[k]); } catch (e) {}
-      if (applied) { syncQuickSensors(); renderQuick(); }
+      // Esito a tre stati: true = commutato in-process (ridisegna) · false = rifiutato
+      // o non disponibile (chiude la tendina) · null = esito non ancora noto, perché il
+      // ponte a messaggi non risponde in modo sincrono → non decidiamo nulla qui.
+      //
+      // L'`await` è obbligatorio. Lo stesso comando torna un booleano sincrono sotto
+      // WebView (@JavascriptInterface) e una Promise sotto GeckoView (richiesta/risposta
+      // sul ponte a messaggi): senza l'attesa il confronto non combaciava mai, `applied`
+      // restava nullo per ogni interruttore e il ramo che ridisegna non si prendeva più.
+      // Await su un valore non-Promise restituisce il valore stesso, quindi la riga è
+      // corretta in entrambi i contenitori — ed è l'unica forma che non chiede alla shell
+      // di sapere dove sta girando.
+      const voluto = !state[k];
+      let applied = null;
+      try { const fn = SETFN[k]; if (fn && NB().has(fn)) { const r = await NB()[fn](voluto); applied = (r === true || r === false) ? r : null; } } catch (e) {}
+      // Nel ramo true si scrive lo stato voluto e non si rilegge quello nativo: la
+      // lettura è l'ultimo annuncio del telefono e in quel momento è ancora quello
+      // vecchio (il sistema lo rimanda dopo il broadcast, ~250 ms). Rileggendolo si
+      // ridisegnava l'interruttore com'era, cioè un lampo nel verso sbagliato.
+      // La spinta successiva del nativo resta l'autorità e corregge comunque.
+      if (applied === true) { state[k] = voluto; renderQuick(); }
       else closeShade();
       return;
     }
     toggle(k);
     el.classList.toggle("on", quickOn(k));
   }
-  function quickAct(act, k, el) {
+  async function quickAct(act, k, el) {
     if (act === "torch") {
-      const on = !state.torch; let applied = false;
-      try { if (NN().setTorch) applied = NN().setTorch(on); } catch {}
-      if (window.NovaNative && !applied) { notify({ app:"camera", title:"Torcia", text:"Torcia non disponibile su questo dispositivo." }); return; }
+      // Come sopra: true = accesa · false = il dispositivo l'ha rifiutata (avvisa)
+      // · null con ponte presente = esito ignoto (non decidiamo) · null senza ponte =
+      // nessun nativo, si simula come in anteprima.
+      // L'attesa serve qui più che altrove: la torcia non ha un broadcast che rimedi,
+      // quindi senza di essa l'interruttore restava spento con la torcia accesa.
+      const on = !state.torch;
+      let applied = null;
+      try { if (NB().has("setTorch")) { const r = await NB().setTorch(on); applied = (r === true || r === false) ? r : null; } } catch {}
+      if (applied === false) { notify({ app:"camera", title:"Torcia", text:"Torcia non disponibile su questo dispositivo." }); return; }
+      if (applied === null && NB().has("setTorch")) return;
       set("torch", on); el.classList.toggle("on", state.torch); return;
     }
     if (act === "night")  { set("theme", state.theme === "dark" ? "light" : "dark"); renderQuick(); return; }
@@ -1757,7 +1824,7 @@ const OS = (() => {
     if (act === "qr")     { closeShade(); openQrScanner(); return; }
     if (act === "shot")   {
       closeShade();
-      if (NN().screenshot) setTimeout(() => { try { NN().screenshot(); } catch {} }, 420);
+      if (NB().has("screenshot")) setTimeout(() => { NB().cmd("screenshot"); }, 420);
       else setTimeout(() => notify({ app:"settings", title:"Schermata", text:"Acquisizione disponibile solo sul dispositivo." }), 300);
       return;
     }
@@ -1799,7 +1866,7 @@ const OS = (() => {
         ${isUrl ? `<button class="btn" id="qr-open">Apri il link</button>` : `<button class="btn" id="qr-copy">Copia</button>`}
         <button class="btn ghost" id="qr-again">Scansiona ancora</button>`;
       res.classList.add("show");
-      const op = res.querySelector("#qr-open"); if (op) op.onclick = () => { close(); if (window.NovaNative && NN().openBrowser) { try { NN().openBrowser(val); return; } catch {} } window.open(val, "_blank"); };
+      const op = res.querySelector("#qr-open"); if (op) op.onclick = () => { close(); if (NB().cmd("openBrowser", val)) return; window.open(val, "_blank"); };
       const cp = res.querySelector("#qr-copy"); if (cp) cp.onclick = () => { try { navigator.clipboard.writeText(val); } catch {} notify({ app:"camera", title:"QR", text:"Testo copiato." }); };
       const ag = res.querySelector("#qr-again"); if (ag) ag.onclick = () => { res.classList.remove("show"); stopped = false; scan(); };
     };
@@ -2073,7 +2140,7 @@ const OS = (() => {
     const d = {};
     try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.indexOf("nova:") === 0) d[k] = localStorage.getItem(k); } } catch {}
     // integra eventuali chiavi presenti solo nelle prefs native (se il bridge le elenca)
-    try { const nn = _prefs(); if (nn && nn.prefKeys) { const raw = nn.prefKeys(); const keys = raw ? JSON.parse(raw) : []; keys.forEach(k => { if (k && k.indexOf("nova:") === 0 && !(k in d)) { const v = nn.prefGet(k); if (v != null) d[k] = v; } }); } } catch {}
+    try { const bk = NB().prefKeys(); const keys = bk ? JSON.parse(bk) : []; keys.forEach(k => { if (k && k.indexOf("nova:") === 0 && !(k in d)) { const v = NB().prefGet(k); if (v != null) d[k] = v; } }); } catch {}
     return d;
   }
   function restoreData(d) {
@@ -2083,7 +2150,7 @@ const OS = (() => {
       if (k.indexOf("nova:") !== 0) continue;
       const v = String(d[k]);
       try { localStorage.setItem(k, v); } catch {}
-      try { if (_prefs().prefSet) _prefs().prefSet(k, v); } catch {}
+      try { NB().prefSet(k, v); } catch {}
       n++;
     }
     return n;
@@ -2268,11 +2335,13 @@ window.addEventListener("message", (ev) => {
 /* ============================================================
    NovaCall — schermata di chiamata dentro NovaOS.
    L'InCallService nativo chiama window.NovaCall.update(stato, numero, nome).
-   I pulsanti richiamano window.NovaNative.call* per pilotare la telefonata.
+   I pulsanti richiamano i comandi call* del ponte (js/bridge.js) per pilotare la
+   telefonata; senza nativo restano i comandi della simulazione.
    ============================================================ */
 window.NovaCall = (() => {
   let ov = null, t0 = 0, timer = null, muted = false, spk = false;
-  const N = () => window.NovaNative || {};
+  // NovaCall vive fuori dall'IIFE di OS: accessore difensivo locale, come in apps.js.
+  const NB = () => window.NovaBridge || { has: () => false, cmd: () => false };
 
   // risolve il contatto dalla rubrica in base al numero
   function resolve(number) {
@@ -2293,7 +2362,7 @@ window.NovaCall = (() => {
 
   // demo = niente bridge nativo (browser/preview): i pulsanti agiscono solo
   // sull'interfaccia, così la schermata di chiamata si prova anche senza ROM.
-  const demo = () => !N().callAnswer && !N().callHangup;
+  const demo = () => !NB().has("callAnswer") && !NB().has("callHangup");
   function build() {
     ov = document.createElement("div");
     ov.className = "call-ov";
@@ -2319,16 +2388,16 @@ window.NovaCall = (() => {
         <button class="call-hangup" data-c="hangup">📞<i>Rifiuta</i></button>
       </div>`;
     (document.querySelector("#device") || document.body).appendChild(ov);
-    ov.querySelector('[data-c="answer"]').onclick  = () => { if (N().callAnswer) N().callAnswer(); else if (demo()) update("active", ov.dataset.num || ""); };
-    ov.querySelector('[data-c="hangup"]').onclick  = () => { if (N().callHangup) N().callHangup(); else close(); };
-    ov.querySelector('[data-c="mute"]').onclick    = e => { muted=!muted; e.currentTarget.classList.toggle("on",muted); if (N().callMute) N().callMute(muted); };
-    ov.querySelector('[data-c="speaker"]').onclick = e => { spk=!spk; e.currentTarget.classList.toggle("on",spk); if (N().callSpeaker) N().callSpeaker(spk); };
+    ov.querySelector('[data-c="answer"]').onclick  = () => { if (NB().has("callAnswer")) NB().cmd("callAnswer"); else if (demo()) update("active", ov.dataset.num || ""); };
+    ov.querySelector('[data-c="hangup"]').onclick  = () => { if (NB().has("callHangup")) NB().cmd("callHangup"); else close(); };
+    ov.querySelector('[data-c="mute"]').onclick    = e => { muted=!muted; e.currentTarget.classList.toggle("on",muted); if (NB().has("callMute")) NB().cmd("callMute", muted); };
+    ov.querySelector('[data-c="speaker"]').onclick = e => { spk=!spk; e.currentTarget.classList.toggle("on",spk); if (NB().has("callSpeaker")) NB().cmd("callSpeaker", spk); };
     ov.querySelector('[data-c="keypad"]').onclick  = () => ov.classList.toggle("dtmf-open");
     ov.querySelector('#call-dtmf-close').onclick   = () => ov.classList.remove("dtmf-open");
     const disp = ov.querySelector("#call-dtmf-disp");
     ov.querySelectorAll("[data-dtmf]").forEach(b => b.onclick = () => {
       disp.textContent += b.dataset.dtmf;
-      if (N().callDtmf) N().callDtmf(b.dataset.dtmf);
+      if (NB().has("callDtmf")) NB().cmd("callDtmf", b.dataset.dtmf);
       OS.api.vibrate(20);
     });
   }
@@ -2379,17 +2448,16 @@ window.NovaDial = (num) => {
 /* Catch-up dello stato chiamata: se una chiamata è arrivata prima che la WebView
    fosse pronta (es. avvio da InCallService), la schermata la recupera al boot. */
 (() => {
-  const N = () => window.NovaNative || {};
+  const NB = () => window.NovaBridge || { has: () => false, currentCallState: () => null };
   let tries = 0;
-  const t = setInterval(() => {
+  const t = setInterval(async () => {
     tries++;
-    if (!window.NovaNative) { clearInterval(t); return; }
-    if (N().currentCallState) {
-      clearInterval(t);
-      try {
-        const s = JSON.parse(N().currentCallState());
-        if (s && s.state !== "ended") NovaCall.update(s.state, s.number || "", s.name || "");
-      } catch (_) {}
-    } else if (tries > 15) clearInterval(t);
+    if (!NB().has("currentCallState")) { clearInterval(t); return; }
+    clearInterval(t);
+    try {
+      const j = await NB().currentCallState();
+      const s = j ? JSON.parse(j) : null;
+      if (s && s.state !== "ended") NovaCall.update(s.state, s.number || "", s.name || "");
+    } catch (_) {}
   }, 400);
 })();

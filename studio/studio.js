@@ -357,6 +357,16 @@ function drawThumb(){
   ctx.fillStyle=c.bg||"#0b0f17"; ctx.fillRect(0,0,W,H);
   const wp=theme.wallpaper||{};
   if (wp.type==="solid" && wp.value) { ctx.fillStyle=wp.value; ctx.fillRect(0,0,W,H); }
+  else if (wp.type==="image" && wp.value) {
+    const img=new Image();
+    img.onload=()=>{
+      const s=Math.max(W/img.width,H/img.height);
+      const w=img.width*s, h=img.height*s;
+      const x=(W-w)*((wp.posX??50)/100), y=(H-h)*((wp.posY??50)/100);
+      ctx.drawImage(img,x,y,w,h);
+    };
+    img.src=wp.value;
+  }
   else if (wp.type==="gradient" && wp.value) {
     const g=ctx.createRadialGradient(W/2,-24,0,W/2,-24,W*0.95);
     g.addColorStop(0,c.accent||"#3f63ff"); g.addColorStop(1,"rgba(0,0,0,0)");
@@ -666,11 +676,21 @@ function applyPreview(){
   s.setProperty("--stext", c.text);
   s.setProperty("--sdim", c["text-dim"]);
   s.setProperty("--sradius", SHAPE_RADIUS[theme.shape.iconShape]||"15px");
-  // sfondo: gradiente sopra bg, oppure tinta unita
+  // sfondo: gradiente sopra bg, tinta unita oppure immagine (stessa semantica di NovaOS:
+  // fit cover/contain/custom + zoom e posizione in percentuale)
   const wp = theme.wallpaper||{};
-  if (wp.type==="solid") $("#screen").style.background = wp.value;
-  else if (wp.type==="gradient" && wp.value) $("#screen").style.background = `${wp.value}, var(--sbg)`;
-  else $("#screen").style.background = "";  // usa il default CSS (glow accento)
+  const sc = $("#screen").style;
+  sc.backgroundImage = ""; sc.backgroundSize = ""; sc.backgroundPosition = ""; sc.backgroundRepeat = "";
+  if (wp.type==="solid") sc.background = wp.value || theme.colors.bg;
+  else if (wp.type==="image" && wp.value) {
+    sc.background = theme.colors.bg;
+    sc.backgroundImage = `url("${wp.value}")`;
+    sc.backgroundSize = wp.fit==="contain" ? "contain" : wp.fit==="custom" ? `${wp.zoom||100}%` : "cover";
+    sc.backgroundPosition = `${wp.posX??50}% ${wp.posY??50}%`;
+    sc.backgroundRepeat = "no-repeat";
+  }
+  else if (wp.type==="gradient" && wp.value) sc.background = `${wp.value}, var(--sbg)`;
+  else sc.background = "";  // usa il default CSS (glow accento)
   // scala testo
   $("#phome").style.setProperty("--fscale", theme.typography.textScale/100);
   $("#phome").style.fontSize = (12.5*theme.typography.textScale/100)+"px";
@@ -757,6 +777,21 @@ function buildWalls(){
     return `<div class="wsw ${on?'on':''}" data-wall="${i}" title="${w.name}" style="background:${bg}"></div>`;
   }).join("");
   $("#f-walls").querySelectorAll("[data-wall]").forEach(el=>el.onclick=()=>{ const w=WALLS[+el.dataset.wall]; theme.wallpaper={type:"gradient",value:w.css}; buildWalls(); applyPreview(); });
+  syncWallControls();
+}
+// mostra/nasconde e allinea i controlli dell'immagine di sfondo
+function syncWallControls(){
+  const wp = theme.wallpaper||{};
+  const isImg = wp.type==="image" && !!wp.value;
+  const opts = $("#f-wall-opts"); if (opts) opts.style.display = isImg ? "" : "none";
+  if (!isImg) return;
+  const fit = wp.fit||"cover";
+  $("#f-wall-fit").querySelectorAll("[data-fit]").forEach(b=>b.classList.toggle("on", b.dataset.fit===fit));
+  const zr = $("#f-wall-zoom-row"); if (zr) zr.style.display = fit==="custom" ? "" : "none";
+  const z = wp.zoom||100, px = wp.posX??50, py = wp.posY??50;
+  $("#f-wall-zoom").value = z; $("#f-wall-zoom-v").textContent = z+"%";
+  $("#f-wall-px").value = px;   $("#f-wall-px-v").textContent = px+"%";
+  $("#f-wall-py").value = py;   $("#f-wall-py-v").textContent = py+"%";
 }
 function syncSegs(){
   $("#f-base").querySelectorAll("[data-base]").forEach(b=>b.classList.toggle("on", b.dataset.base===theme.meta.base));
@@ -836,6 +871,25 @@ function resizeImage(file, max){
         const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
         cv.getContext("2d").drawImage(img, 0, 0, w, h);
         res(cv.toDataURL("image/png"));
+      } catch (e) { rej(e); } finally { URL.revokeObjectURL(url); } };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error("il file non è un'immagine")); };
+    img.src = url;
+  });
+}
+// ridimensiona un'immagine di sfondo a lato max 1080px e la restituisce come JPEG
+// data URL (stessa scelta di NovaOS: Impostazioni → Display → Sfondo).
+function resizeWallpaper(file){
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { try {
+        const s = Math.min(1, 1080 / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * s)), h = Math.max(1, Math.round(img.height * s));
+        const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+        const ctx = cv.getContext("2d");
+        ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h);   // eventuale trasparenza → nero
+        ctx.drawImage(img, 0, 0, w, h);
+        res(cv.toDataURL("image/jpeg", 0.85));
       } catch (e) { rej(e); } finally { URL.revokeObjectURL(url); } };
     img.onerror = () => { URL.revokeObjectURL(url); rej(new Error("il file non è un'immagine")); };
     img.src = url;
@@ -988,6 +1042,12 @@ function validateTheme(){
     const okImg=/^data:image\//i.test(s)||/^https:\/\//i.test(s); const okText=!/^data:|^https?:|^javascript:/i.test(s)&&s.length<=8 && !/[<>"'`]/.test(s);
     if (s && !okImg && !okText) badIcons++; });
   if (badIcons) out.push({level:"error", msg:`${badIcons} icona/e personalizzata/e non valida/e`, sub:`NovaOS le scarterà (solo emoji brevi o URL data:image//https)`});
+  // --- sfondo ---
+  const wp = theme.wallpaper || {};
+  if (wp.type==="image" && !(wp.value && (/^data:image\//i.test(wp.value) || /^https:\/\//i.test(wp.value))))
+    out.push({level:"error", msg:`Immagine di sfondo non valida`, sub:`Serve un data URL immagine o un URL https`});
+  if (wp.type==="image" && wp.fit && !["cover","contain","custom"].includes(wp.fit))
+    out.push({level:"warn", msg:`Inquadratura dello sfondo sconosciuta`, sub:`NovaOS userà «cover»`});
   // --- suoni ---
   const sndBad=[];
   [["ringtone","Suoneria",RING],["notif","Notifica",NOTIF],["alarm","Sveglia",ALARM]].forEach(([k,lab,set])=>{
@@ -1051,6 +1111,19 @@ $("#f-ts").oninput = e => { theme.typography.textScale=+e.target.value; $("#ts-v
 $("#f-font").querySelectorAll("[data-font]").forEach(b=>b.onclick=()=>{ theme.typography.font=b.dataset.font; syncSegs(); applyPreview(); });
 $("#f-weight").querySelectorAll("[data-weight]").forEach(b=>b.onclick=()=>{ theme.typography.weight=b.dataset.weight; syncSegs(); applyPreview(); });
 $("#f-solid-use").onclick = () => { theme.wallpaper={type:"solid",value:$("#f-solid").value}; buildWalls(); applyPreview(); };
+$("#f-wall-img").onchange = e => {
+  const f = e.target.files && e.target.files[0]; e.target.value = "";
+  if (!f) return;
+  resizeWallpaper(f).then(url => {
+    theme.wallpaper = { type:"image", value:url, fit:"cover", zoom:100, posX:50, posY:50 };
+    buildWalls(); applyPreview();
+  }).catch(err => alert("Immagine non valida: " + err.message));
+};
+$("#f-wall-clear").onclick = () => { theme.wallpaper={type:"gradient",value:WALLS[1].css}; buildWalls(); applyPreview(); };
+$("#f-wall-fit").querySelectorAll("[data-fit]").forEach(b=>b.onclick=()=>{ theme.wallpaper.fit=b.dataset.fit; buildWalls(); applyPreview(); });
+$("#f-wall-zoom").oninput = e => { theme.wallpaper.zoom=+e.target.value; syncWallControls(); applyPreview(); };
+$("#f-wall-px").oninput   = e => { theme.wallpaper.posX=+e.target.value; syncWallControls(); applyPreview(); };
+$("#f-wall-py").oninput   = e => { theme.wallpaper.posY=+e.target.value; syncWallControls(); applyPreview(); };
 
 $("#new").onclick = () => { loadTheme(freshTheme(theme.meta.base)); buildAll(); };
 // Costruisce il JSON .novatheme/2 "pulito": valida, allinea la forma icone e "cuoce"

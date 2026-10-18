@@ -15,6 +15,13 @@ const NovaApps = (() => {
     return `<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" style="width:1em;height:1em;vertical-align:-.125em;${css||''}">${inner}</svg>`;
   };
 
+  // Accessore difensivo al ponte pagina↔nativo (vedi js/bridge.js). Le app che usano
+  // più metodi ne dichiarano uno proprio nel loro render (più ricco di default): qui
+  // c'è il minimo per le app che hanno bisogno solo di inoltrare un comando.
+  // `cmd` restituisce true solo se il comando è arrivato al nativo: dove non arriva,
+  // l'app prosegue con la simulazione, come faceva il vecchio probe su NovaNative.
+  const NB = () => window.NovaBridge || { has: () => false, cmd: () => false };
+
   // Rubrica di esempio, condivisa tra Rubrica e Telefono (default al primo avvio).
   const CONTACTS_SEED = [
     { id:1, name:"Anna Rossi", phone:"+39 340 1234567", email:"anna@example.com", fav:true },
@@ -25,7 +32,9 @@ const NovaApps = (() => {
   /* ---------- Telefono (tastierino + preferiti + recenti + contatti + chiamata reale) ---------- */
   const phone = app({ id:"phone", name:"Telefono", icon:"📞", color:"#35c759", dock:true,
     render(root, os) {
-      const native = typeof window.NovaNative !== "undefined";
+      // Accessore difensivo al ponte pagina↔nativo (vedi js/bridge.js).
+      const NB = () => window.NovaBridge || { has: () => false, cmd: () => false };
+      const native = NB().has("call");
       let log = os.store.get("callLog", []);
       const saveLog = () => os.store.set("callLog", log);
       const contacts = () => os.store.get("contacts", CONTACTS_SEED);
@@ -44,7 +53,7 @@ const NovaApps = (() => {
         log.unshift({ num, name:name || nameOf(num), time:Date.now(), dir:"out" });
         log = log.slice(0, 50); saveLog();
         os.vibrate(30);
-        if (native && window.NovaNative.call) window.NovaNative.call(num);
+        if (native) NB().cmd("call", num);
         else if (window.NovaCall) {
           // demo (browser/preview, senza ROM): mostra la schermata di chiamata
           // simulata — dialing poi attiva — così la UI si prova anche qui.
@@ -66,8 +75,7 @@ const NovaApps = (() => {
       };
 
       const smsNum = num => { const n = norm(num);
-        if (window.NovaNative && window.NovaNative.sms) window.NovaNative.sms(n, "");
-        else window.location.href = "sms:" + n; };
+        if (!NB().cmd("sms", n, "")) window.location.href = "sms:" + n; };
 
       const shell = (body) => {
         root.innerHTML = `
@@ -368,14 +376,15 @@ const NovaApps = (() => {
         root.querySelector("#delc").onclick = async () => { if(await os.confirm({title:"Eliminare conversazione?",message:"La chat con "+name+" verrà eliminata.",okText:"Elimina"})){ delete threads[name]; save(); drawList(); } };
         const th = root.querySelector("#thread"); th.scrollTop = th.scrollHeight;
         const input = root.querySelector("#msg");
-        const nativeSms = window.NovaNative && window.NovaNative.sendSms;
+        const nativeSms = NB().has("sendSms");
         const send = () => {
           const v = input.value.trim(); if(!v) return;
           msgs.push(["out",v,now(),Date.now()]); save(); input.value="";
           th.innerHTML = bubbles(); th.scrollTop = th.scrollHeight;
           if (nativeSms) {
             const num = resolveNumber(name);
-            if (num) { try { window.NovaNative.sendSms(num, v); os.notify({app:"messages",title:name,text:"SMS inviato"}); } catch(e){ os.notify({app:"messages",title:name,text:"Invio SMS non riuscito"}); } }
+            if (num) { if (NB().cmd("sendSms", num, v)) os.notify({app:"messages",title:name,text:"SMS inviato"});
+                       else os.notify({app:"messages",title:name,text:"Invio SMS non riuscito"}); }
             else os.notify({ app:"messages", title:name, text:"Nessun numero valido per l'invio" });
           } else {
             setTimeout(()=>{ msgs.push(["in",autoReply(v),now(),Date.now()]); save();
@@ -477,18 +486,20 @@ const NovaApps = (() => {
       root.querySelector("#timer").onclick = () => { timerSec = timerSec===0?3:timerSec===3?10:0; root.querySelector("#timer-lbl").textContent = timerSec?timerSec+"s":"off"; };
       const flashBtn = root.querySelector("#flash");
       flashBtn.onclick = () => { flashOn = !flashOn; root.querySelector("#flash-lbl").textContent = flashOn?"on":"off"; flashBtn.style.color = flashOn?"#ffd60a":"#fff";
-        try { if (window.NovaNative && window.NovaNative.setTorch && facing==="environment") window.NovaNative.setTorch(flashOn); } catch {} };
+        try { if (facing==="environment" && NB().has("setTorch")) NB().setTorch(flashOn); } catch {} };
 
       const shotBtn = root.querySelector("#shot");
       const micChip = root.querySelector("#mic-chip");
       const micTxt = root.querySelector("#mic-txt");
       const micBtn = root.querySelector("#mic-enable");
-      const micGranted = () => { try { return window.NovaNative && window.NovaNative.micGranted ? !!window.NovaNative.micGranted() : true; } catch { return true; } };
+      // Accessore difensivo al ponte pagina↔nativo (vedi js/bridge.js).
+      const NB = () => window.NovaBridge || { has: () => false, cmd: () => false, micGranted: () => true, micDiag: () => "granted", audioRecStart: () => false, audioRecStop: () => "" };
+      const micGranted = () => { try { return NB().has("micGranted") ? NB().micGranted() === true : true; } catch { return true; } };
       // aggiorna l'avviso microfono: nascosto se c'è audio; "Attiva" (Impostazioni)
       // se il permesso è negato; "Riprova" se il permesso c'è ma manca la traccia audio.
       // se c'è il fallback audio nativo del runtime, l'audio del video è comunque
       // registrabile (traccia separata sincronizzata in riproduzione): nessun avviso.
-      const nativeAudioAvail = !!(window.NovaNative && window.NovaNative.audioRecStart);
+      const nativeAudioAvail = NB().has("audioRecStart");
       const updateMicChip = () => {
         if (!wantAudio || hasAudioTrack || nativeAudioAvail) { micChip.style.display = "none"; return; }
         const granted = micGranted();
@@ -499,17 +510,20 @@ const NovaApps = (() => {
       };
       micBtn.onclick = () => {
         if (micChip.dataset.act === "retry") { start(); return; }
-        try { if (window.NovaNative && window.NovaNative.openAppSettings) { window.NovaNative.openAppSettings(); return; } } catch {}
-        try { window.NovaNative && window.NovaNative.requestMic && window.NovaNative.requestMic(); } catch {}
+        if (NB().cmd("openAppSettings")) return;
+        NB().cmd("requestMic");
       };
       const setMode = (m) => { mode = m;
         root.querySelectorAll("[data-mode]").forEach(b=>b.classList.toggle("on", b.dataset.mode===m));
         shotBtn.classList.toggle("rec", m==="video");
-        // Audio del video: se c'è il runtime nativo (WebView) lo registriamo a parte,
-        // quindi l'anteprima resta video-only (nessuna contesa sul microfono). Senza
-        // nativo (GeckoView/desktop) chiediamo l'audio dentro lo stream web.
-        if (m==="video") { try { window.NovaNative && window.NovaNative.requestMic && window.NovaNative.requestMic(); } catch {} }
-        const want = (m==="video") && !nativeAudioAvail;
+        // Audio del video: si chiede SEMPRE dentro lo stream web, anche quando il
+        // runtime nativo saprebbe registrarlo a parte. Un audio registrato a parte
+        // vive accanto al video solo dentro NovaOS (in riproduzione resta
+        // sincronizzato) e si perde appena il filmato esce: condiviso o salvato in
+        // Download arrivava senza voce. Con l'audio dentro lo stream il filmato è
+        // UN file solo, con il suo suono, e vale per qualunque destinazione.
+        if (m==="video") NB().cmd("requestMic");
+        const want = (m==="video");
         if (want !== wantAudio) {
           wantAudio = want;
           if (!want) micChip.style.display = "none";
@@ -525,9 +539,13 @@ const NovaApps = (() => {
         else { t.style.backgroundImage = ""; t.innerHTML = ICO("images","width:22px;height:22px"); }
       };
 
-      // in modalità Video acquisiamo UN solo stream video+audio (registrazione
-      // affidabile su WebView); in Foto lo stream è solo video (così scattare
-      // non dipende mai dal permesso microfono).
+      // In modalità Video chiediamo UN solo stream video+audio: l'audio finisce così
+      // dentro il filmato, e resta con lui quando lo si condivide o lo si salva in
+      // Download. In Foto lo stream è solo video, così scattare non dipende mai dal
+      // permesso microfono. Se la traccia audio non arriva (permesso negato, o
+      // telefono che non la concede al motore web), si ricade sul registratore
+      // nativo: l'audio resta sincronizzato in riproduzione dentro NovaOS, ma non
+      // esce insieme al video.
       let wantAudio = false, hasAudioTrack = false;
       let curVideo = { facingMode: facing };
       const start = async (videoConstraint) => {
@@ -588,7 +606,7 @@ const NovaApps = (() => {
           // video stesso. Altrimenti, se la WebView non cattura il microfono, registra
           // l'audio col runtime nativo in parallelo -> traccia separata sincronizzata.
           if (!hasAudioTrack && nativeAudioAvail) {
-            try { nativeAudioRec = !!window.NovaNative.audioRecStart(); } catch { nativeAudioRec = false; }
+            try { nativeAudioRec = (await NB().audioRecStart()) === true; } catch { nativeAudioRec = false; }
           }
           const cand = ["video/webm;codecs=vp8,opus","video/webm;codecs=vp9,opus","video/webm;codecs=h264,opus","video/mp4;codecs=h264,aac","video/webm"];
           let mime = cand.find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || "";
@@ -608,12 +626,13 @@ const NovaApps = (() => {
           const clock = root.querySelector("#rec-clock"); clock.style.display = "inline-block";
           recTimer = setInterval(()=>{ const s=Math.floor((Date.now()-recStart)/1000); clock.textContent = "● "+String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"); }, 500);
           os.vibrate && os.vibrate(20);
-        } catch (e) { if (nativeAudioRec) { try { window.NovaNative.audioRecStop(); } catch {} nativeAudioRec = false; } os.notify({ app:"camera", title:"Video", text:"Registrazione non supportata qui." }); }
+        } catch (e) { if (nativeAudioRec) { try { if (NB().has("audioRecStop")) await NB().audioRecStop(); } catch {} nativeAudioRec = false; } os.notify({ app:"camera", title:"Video", text:"Registrazione non supportata qui." }); }
       };
-      const stopRec = () => {
+      const stopRec = async () => {
         if (!rec) return;
-        // ferma prima l'audio nativo e conservane la traccia per onstop
-        if (nativeAudioRec) { try { pendingAudioTrack = window.NovaNative.audioRecStop() || null; } catch { pendingAudioTrack = null; } nativeAudioRec = false; }
+        // ferma prima l'audio nativo e conservane la traccia per onstop: l'ordine è
+        // obbligatorio (onstop legge pendingAudioTrack), quindi si aspetta la risposta.
+        if (nativeAudioRec) { try { pendingAudioTrack = (await NB().audioRecStop()) || null; } catch { pendingAudioTrack = null; } nativeAudioRec = false; }
         try { rec.stop(); } catch {}
         rec = null; clearInterval(recTimer); recTimer = null;
         shotBtn.classList.remove("recording");
@@ -659,7 +678,7 @@ const NovaApps = (() => {
 
       start(); updateThumb();
       root._cleanup = () => { try{ if(rec) rec.stop(); }catch{} clearInterval(recTimer);
-        try { if (flashOn && window.NovaNative && window.NovaNative.setTorch) window.NovaNative.setTorch(false); } catch {}
+        try { if (flashOn && NB().has("setTorch")) NB().setTorch(false); } catch {}
         window.__novaMic = null; window.__novaMicResume = null;
         if (stream) stream.getTracks().forEach(t=>t.stop()); };
     }});
@@ -739,13 +758,12 @@ const NovaApps = (() => {
         root.querySelector("#edit").onclick = () => drawEdit(id);
         root.querySelector("#call").onclick = () => {
           const num = c.phone.replace(/\s/g,"");
-          if (window.NovaNative && window.NovaNative.call) window.NovaNative.call(num);
+          if (native) NB().cmd("call", num);
           else window.location.href = "tel:" + num;
         };
         root.querySelector("#sms").onclick = () => {
           const num = c.phone.replace(/\s/g,"");
-          if (window.NovaNative && window.NovaNative.sms) window.NovaNative.sms(num,"");
-          else window.location.href = "sms:" + num;
+          if (!NB().cmd("sms", num, "")) window.location.href = "sms:" + num;
         };
         const mail = root.querySelector("#mail"); if (mail) mail.onclick = () => window.location.href = "mailto:" + c.email;
         root.querySelector("#del").onclick = async () => { if(await os.confirm({title:"Eliminare contatto?",message:c.name+" verrà eliminato dalla rubrica.",okText:"Elimina"})){ list=list.filter(x=>x.id!==id); save(); drawList(); } };
@@ -790,10 +808,20 @@ const NovaApps = (() => {
     }});
 
   /* ---------- Browser ---------- */
+  // Il browser NATIVO a schermo intero e questa app mostrano lo stesso elenco di
+  // preferiti: vivono nella stessa copia (le preferenze native «novaos», chiave
+  // nova:bookmarks) e ognuno la legge quando disegna. Quando è il browser nativo a
+  // salvarne uno, lo annuncia con questa funzione — altrimenti qui resterebbe l'elenco
+  // di prima, e un preferito appena aggiunto sembrerebbe non essere stato salvato.
+  // Chi riceve può non essere ancora nato (la schermata del Browser si disegna solo
+  // quando la si apre): la chiamata è condizionata, e un annuncio perso non è un guasto,
+  // perché l'elenco si rilegge comunque alla prossima apertura.
+  window.__novaPreferiti = () => { const f = window.__novaPreferitiApp; if (typeof f === "function") f(); };
+
   const browser = app({ id:"browser", name:"Browser", icon:"🌐", color:"#0a84ff", dock:true,
     render(root, os) {
       // sul device (launcher) apre a schermo intero: nessun limite iframe (banche ecc.)
-      const native = !!(window.NovaNative && window.NovaNative.openBrowser);
+      const native = NB().has("openBrowser");
       let bookmarks = os.store.get("bookmarks", [
         { name:"Wikipedia", url:"https://it.wikipedia.org" },
         { name:"OpenStreetMap", url:"https://www.openstreetmap.org" },
@@ -877,10 +905,19 @@ const NovaApps = (() => {
         const clr = root.querySelector("#clrh"); if (clr) clr.onclick = () => { history=[]; saveH(); drawHome(); };
       };
 
+      // Riceve l'annuncio del browser nativo (v. window.__novaPreferiti qui sopra):
+      // rilegge la copia condivisa invece di tenere l'elenco com'era all'apertura.
+      // Se nel frattempo si è usciti dall'app, il disegno si salta — `root` è staccata
+      // dal documento — e l'elenco fresco verrà letto quando la si riapre.
+      window.__novaPreferitiApp = () => {
+        bookmarks = os.store.get("bookmarks", bookmarks);
+        if (root.isConnected) drawHome();
+      };
+
       const drawFrame = (u) => {
         u = norm(u);
         const openReal = () => {
-          if (window.NovaNative && window.NovaNative.openBrowser) { try { window.NovaNative.openBrowser(u); return; } catch(e){} }
+          if (NB().cmd("openBrowser", u)) return;
           try { window.open(u, "_blank", "noopener"); } catch(e){}
         };
         root.innerHTML = `<div class="back-bar" style="padding:6px 10px;gap:6px"><button class="back-btn"></button>
@@ -976,7 +1013,7 @@ const NovaApps = (() => {
 
       // ---- stato ----
       let items = [], viewTab = "foto", cat = null, sel = [], selMode = false, q = "";
-      let lpFired = false, lastMems = [], albumCache = [];
+      let lpFired = false, lastMems = [], albumCache = [], lastGroups = [];
 
       const isVid = p => !!p.video;
       const fmtShort = ts => ts ? new Date(ts).toLocaleString("it-IT", { day:"numeric", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" }) : "—";
@@ -986,7 +1023,11 @@ const NovaApps = (() => {
         const diff = (strip(t) - strip(d)) / 86400000;
         if (diff === 0) return "Oggi"; if (diff === 1) return "Ieri";
         return d.toLocaleDateString("it-IT", { weekday:"long", day:"numeric", month:"long", ...(d.getFullYear() !== t.getFullYear() ? { year:"numeric" } : {}) }); };
-      const sizeOf = data => { try { const b = atob((data || "").split(",")[1] || ""); return (b.length / 1024).toFixed(0) + " KB"; } catch { return "—"; } };
+      // La parte dati di un data URL comincia dopo l'ULTIMA virgola: l'intestazione
+      // può contenerne una per conto suo (video/webm;codecs=vp8,opus). Prendendo la
+      // prima, la dimensione dei filmati non si calcolava e la scheda informazioni
+      // mostrava un trattino al posto dei KB.
+      const sizeOf = data => { try { const s = data || ""; const k = s.lastIndexOf(","); if (k < 0) return "—"; const b = atob(s.slice(k + 1)); return (b.length / 1024).toFixed(0) + " KB"; } catch { return "—"; } };
 
       const groupByDate = arr => { const out = []; let last = null;
         arr.forEach(p => { const l = dayLabel(p.ts); if (l !== last) { out.push({ label: l, items: [], count: 0 }); last = l; } out[out.length - 1].items.push(p); out[out.length - 1].count++; });
@@ -998,7 +1039,15 @@ const NovaApps = (() => {
           return { label: new Date(y, m, 1).toLocaleDateString("it-IT", { month:"long", year:"numeric" }) + " · " + (yrs > 1 ? yrs + " anni fa" : yrs === 1 ? "1 anno fa" : "qualche mese fa"), items: map[k] }; }).slice(0, 8); };
 
       const playBadge = `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none"><div style="width:30px;height:30px;border-radius:50%;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;color:#fff;font-size:calc(13px*var(--fscale,1))">▶</div></div>`;
-      const cell = (p, i) => {
+      // Il numero scritto sulla cella è un indice dentro `items`, e NON dentro la fetta
+      // passata a gridHtml. Le griglie di Foto e Cerca sono costruite gruppo per giorno
+      // (`groupByDate`) e ogni gruppo riparte da zero: prendere l'indice dalla fetta
+      // significava toccare la seconda foto di un giorno e aprirne la seconda della
+      // galleria intera — «clicco una foto e me ne apre un'altra». L'indice si ricava
+      // qui dall'elemento, così la cella sa sempre dove sta nella lista da cui il
+      // visualizzatore pesca e conta avanti/indietro: una sola fonte di verità.
+      const cell = (p) => {
+        const i = items.indexOf(p);
         const checked = selMode && sel.includes(p.id);
         const media = p.video
           ? `<div class="gp-media" style="background-image:url('${p.poster || p.data}')">${playBadge}</div>`
@@ -1007,7 +1056,7 @@ const NovaApps = (() => {
           ${p.fav ? `<span class="gp-fav">${ICO("heart-fill")}</span>` : ""}
           ${selMode ? `<span class="gp-check">${checked ? "✓" : ""}</span>` : ""}</div>`;
       };
-      const gridHtml = (arr, pad = "4px 2px 0") => `<div class="gp-grid" style="padding:${pad}">${arr.map((p, i) => cell(p, i)).join("")}</div>`;
+      const gridHtml = (arr, pad = "4px 2px 0") => `<div class="gp-grid" style="padding:${pad}">${arr.map(p => cell(p)).join("")}</div>`;
 
       const frame = (top, body) => root.innerHTML = `<div style="height:100%;display:flex;flex-direction:column">${top}
         <div style="flex:1;overflow-y:auto" class="gp-body">${body}<div style="height:14px"></div></div>${tabbar()}</div>`;
@@ -1020,10 +1069,13 @@ const NovaApps = (() => {
 
       // ---- header (normale / selezione / barra con back) ----
       const ACTS = { album:["folder2-open"], heart:["heart-fill"], share:["share-fill"], trash:["trash-fill"], restore:["arrow-repeat"], del:["trash-fill"] };
+      // In selezione, accanto alle azioni: "Tutti" sceglie in un colpo solo tutto
+      // quello che si sta vedendo (la scheda, la raccolta, il risultato della
+      // ricerca), e diventa "Nessuno" quando è già tutto scelto.
       const selHeader = (keys) => `<div class="gp-top sel">
         <button class="gp-close" data-sel="x">${ICO("x-lg","width:20px;height:20px")}</button>
         <div class="gp-count" id="sel-count"></div>
-        <div class="gp-acts">${keys.map(k => `<button class="gp-act" data-sel="${k}">${ICO(ACTS[k][0],"width:20px;height:20px")}</button>`).join("")}</div></div>`;
+        <div class="gp-acts"><button class="gp-text-btn" id="sel-all" data-sel="all">Tutti</button>${keys.map(k => `<button class="gp-act" data-sel="${k}">${ICO(ACTS[k][0],"width:20px;height:20px")}</button>`).join("")}</div></div>`;
       const barHeader = (title, right = "") => `<div class="gp-top back"><button class="back-btn" id="g-back"></button><h1>${title}</h1><div class="gp-acts">${right}</div></div>`;
       const fotoHeader = () => selMode
         ? selHeader(["album", "heart", "share", "trash"])
@@ -1034,11 +1086,18 @@ const NovaApps = (() => {
 
       // ---- viste ----
       const memCard = (mm, i) => `<div class="mem" data-mem="${i}"><div class="mem-cols">${mm.items.slice(0, 3).map(p => `<div style="background-image:url('${p.poster || p.data}')"></div>`).join("")}</div><div class="mem-title">${mm.label}</div></div>`;
+      // Intestazione di un giorno, con il segno di selezione a destra: un tocco
+      // prende tutte le foto di quel giorno (v. il binding su [data-day] in bindTop).
+      const dayHead = (s, gi) => `<div class="date-head" data-day="${gi}">${s.label}${s.count > 1 ? ` <span class="date-count">${s.count}</span>` : ""}<span class="date-pick">${ICO("check-circle-fill","width:19px;height:19px")}</span></div>`;
+      // Gli id di una giornata che sono ancora nell'elenco in vista: dopo una ricerca
+      // o un filtro un gruppo può nominare elementi che non si stanno più mostrando.
+      const giornoIds = g => g ? g.items.map(p => p.id).filter(x => items.some(p => p.id === x)) : [];
       const renderFoto = (shown) => {
         lastMems = memories(shown);
         let body = "";
         if (lastMems.length) body += `<div class="mem-wrap"><div class="mem-head">Ricordi</div><div class="mem-strip">${lastMems.map((mm, i) => memCard(mm, i)).join("")}</div></div>`;
-        if (shown.length) groupByDate(shown).forEach(s => body += `<div class="date-head">${s.label}${s.count > 1 ? ` <span class="date-count">${s.count}</span>` : ""}</div>` + gridHtml(s.items));
+        lastGroups = shown.length ? groupByDate(shown) : [];
+        if (shown.length) lastGroups.forEach((s, gi) => { body += dayHead(s, gi) + gridHtml(s.items); });
         else body += `<div class="gp-empty">${ICO("images","width:44px;height:44px")}<p>Nessuna foto.<br>Scatta con la Fotocamera o importa immagini.</p></div>`;
         frame(fotoHeader(), body);
         bindTop(); bindCells(root);
@@ -1052,9 +1111,11 @@ const NovaApps = (() => {
           const needle = q.toLowerCase();
           const res = shown.filter(p => !needle || p.name.toLowerCase().includes(needle) || (p.album || "").toLowerCase().includes(needle) || dayLabel(p.ts).toLowerCase().includes(needle));
           items = res;
-          body += res.length ? groupByDate(res).map(s => `<div class="date-head">${s.label}</div>` + gridHtml(s.items)).join("") : `<div class="gp-empty"><p>Nessun risultato per “${q}”.</p></div>`;
+          lastGroups = res.length ? groupByDate(res) : [];
+          body += res.length ? lastGroups.map((s, gi) => dayHead(s, gi) + gridHtml(s.items)).join("") : `<div class="gp-empty"><p>Nessun risultato per “${q}”.</p></div>`;
         } else {
           items = shown;
+          lastGroups = [];
           body += `<div class="sec-label">Categorie</div>`;
           body += CATS.map(([n, ic, col], i) => `<div class="gp-catrow" data-scat="${i}"><div class="i-ico" style="background:${col}">${ICO(ic,"width:20px;height:20px")}</div><div class="i-body"><div class="i-title">${n}</div><div class="i-sub">${counts[n]}</div></div><div style="color:var(--text-dim)">›</div></div>`).join("");
           if (lastMems.length) body += `<div class="mem-wrap"><div class="mem-head">Ricordi</div><div class="mem-strip">${lastMems.map((mm, i) => memCard(mm, i)).join("")}</div></div>`;
@@ -1073,7 +1134,10 @@ const NovaApps = (() => {
       // Eliminare una raccolta SGANCA le foto (album="") senza cancellarle: tornano in
       // Fotocamera, come Google Foto.
       const DEF_ALBUMS = ["Paesaggi", "Città", "Natura"];
-      const gallAlbums = () => { try { const a = os.store.get("gallAlbums", null); return Array.isArray(a) && a.length ? a.filter(Boolean) : DEF_ALBUMS.slice(); } catch (e) { return DEF_ALBUMS.slice(); } };
+      // Il seme si applica solo se la chiave non è MAI stata salvata (null): una lista
+      // vuota è una scelta dell'utente (ha eliminato le raccolte di esempio) e va
+      // rispettata. Con `&& a.length` l'ultima eliminazione faceva ripartire il seme.
+      const gallAlbums = () => { try { const a = os.store.get("gallAlbums", null); return Array.isArray(a) ? a.filter(Boolean) : DEF_ALBUMS.slice(); } catch (e) { return DEF_ALBUMS.slice(); } };
       const saveGallAlbums = a => os.store.set("gallAlbums", a);
       const escH = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
       const pickAlbumName = (title, ph) => new Promise(resolve => {
@@ -1227,15 +1291,57 @@ const NovaApps = (() => {
       };
 
       // ---- interazioni griglia ----
-      const exitSel = () => { selMode = false; sel = []; draw(); };
-      const toggleSel = id => { const k = sel.indexOf(id); if (k >= 0) sel.splice(k, 1); else sel.push(id); draw(); };
-      const enterSel = (id) => { selMode = true; sel = id ? [id] : []; draw(); };
+      // Ridisegna la griglia (serve per entrare o uscire dalla selezione: le celle
+      // cambiano forma, compare o sparisce il cerchio di spunta) ma RIMETTENDO la
+      // videata dove stavi scorrendo. Prima ogni tocco ridisegnava tutto e la
+      // griglia ripartiva dall'alto: per scegliere quattro cose in fondo
+      // bisognava riscorrere quattro volte.
+      const drawKeep = async () => {
+        const b0 = root.querySelector(".gp-body");
+        const top = b0 ? b0.scrollTop : 0;
+        await draw();
+        const b1 = root.querySelector(".gp-body");
+        if (b1 && top) b1.scrollTop = top;
+      };
+      // Aggiorna i segni della selezione SENZA ricostruire la griglia: si accende o
+      // si spegne la cella toccata, si aggiorna il contatore, e la videata non si
+      // muove di un pixel. Questa è la strada di ogni tocco in selezione.
+      const syncSelMarks = () => {
+        root.querySelectorAll(".gp-cell").forEach(el => {
+          const it = items[+el.dataset.i]; if (!it) return;
+          const on = sel.includes(it.id);
+          el.classList.toggle("sel", on);
+          const ck = el.querySelector(".gp-check"); if (ck) ck.textContent = on ? "✓" : "";
+        });
+        // Il segno accanto alla data segue la sua giornata: spento finché qualcosa
+        // di quel giorno resta fuori, acceso quando la giornata è presa tutta.
+        root.querySelectorAll("[data-day]").forEach(el => {
+          const g = lastGroups[+el.dataset.day]; if (!g) return;
+          const ids = giornoIds(g);
+          el.classList.toggle("sel-day", ids.length > 0 && ids.every(x => sel.includes(x)));
+        });
+        const cnt = root.querySelector("#sel-count");
+        if (cnt) cnt.textContent = sel.length === 1 ? "1 elemento" : sel.length + " elementi";
+        const ba = root.querySelector("#sel-all");
+        if (ba) ba.textContent = (items.length && sel.length >= items.length) ? "Nessuno" : "Tutti";
+      };
+      const exitSel = () => { selMode = false; sel = []; drawKeep(); };
+      const toggleSel = id => { const k = sel.indexOf(id); if (k >= 0) sel.splice(k, 1); else sel.push(id); syncSelMarks(); };
+      // "Tutti" / "Nessuno": prende tutto quello che si sta vedendo (la scheda, la
+      // raccolta aperta, il risultato della ricerca), non tutto l'archivio.
+      const selAll = () => { sel = (items.length && sel.length < items.length) ? items.map(p => p.id) : []; syncSelMarks(); };
+      const enterSel = (id) => { selMode = true; sel = id ? [id] : []; drawKeep(); };
       const bindCells = (container) => {
         container.querySelectorAll(".gp-cell").forEach(el => {
-          const id = items[+el.dataset.i].id;
+          const i = +el.dataset.i, it = items[i];
+          // Se la cella non è in `items` (indice -1: non deve succedere, ma se
+          // succedesse) resta inerte: meglio una cella che non risponde di una che
+          // apre la foto sbagliata.
+          if (!it) return;
+          const id = it.id;
           el.addEventListener("click", () => {
             if (lpFired) { lpFired = false; return; }
-            if (selMode) toggleSel(id); else openViewer(+el.dataset.i);
+            if (selMode) toggleSel(id); else openViewer(i);
           });
           let t = null, mt = null;
           const fire = () => { if (selMode) return; lpFired = true; enterSel(id); };
@@ -1257,9 +1363,27 @@ const NovaApps = (() => {
         for (const id of cur) await os.photos.patch(id, { fav: !allFav });
         exitSel();
       };
+      // Un elemento si condivide per quello che È. Il video passava dal ramo "image",
+      // e shareImage non guarda il mime: scriveva il filmato in un file ".jpg" con
+      // tipo dichiarato image/jpeg. Il file era giusto (e quindi grande quanto il
+      // video), il nome no — e all'app di destinazione arrivava «una jpeg grande
+      // quanto il filmato», inapribile. I video vanno dal ramo "file", che dal mime
+      // ricava l'estensione vera.
+      const nomeItem = p => (p.video ? "novaos-video-" : "novaos-foto-") + (p.ts || p.id);
+      const shareItem = (p) => p.video
+        ? os.share({ app:"gallery", file:{ data:p.data, name:nomeItem(p) }, title:"Video da NovaOS" })
+        : os.share({ app:"gallery", image:p.data, filename:nomeItem(p), title:"Foto da NovaOS" });
+      // Selezione multipla: UNA condivisione con dentro tutti gli elementi, non N
+      // chiamate in fila. Prima si passava solo il primo della selezione (e nemmeno
+      // quello toccato per primo: il primo in ordine di galleria), quindi «condividi
+      // 4 foto» ne condivideva una — o nessuna, se il primo elemento non era tra
+      // quelli scelti.
       const selShare = async () => {
-        const p = items.find(x => sel.includes(x.id));
-        if (p) await os.share({ app:"gallery", image: p.data, filename:"novaos-foto", title:"Foto da NovaOS" });
+        const scelti = items.filter(x => sel.includes(x.id));
+        if (scelti.length === 1) await shareItem(scelti[0]);
+        else if (scelti.length > 1)
+          await os.share({ app:"gallery", title:"Elementi da NovaOS",
+                           files: scelti.map(p => ({ data:p.data, name:nomeItem(p) })) });
         exitSel();
       };
       const selTrash = async () => {
@@ -1290,11 +1414,10 @@ const NovaApps = (() => {
         draw();
       };
       const bindSelHeader = () => {
-        const cnt = root.querySelector("#sel-count");
-        if (cnt) cnt.textContent = sel.length === 1 ? "1 elemento" : sel.length + " elementi";
         root.querySelectorAll("[data-sel]").forEach(b => b.onclick = () => {
           const a = b.dataset.sel;
           if (a === "x") exitSel();
+          else if (a === "all") selAll();
           else if (a === "album") selAlbum();
           else if (a === "heart") selFav();
           else if (a === "share") selShare();
@@ -1302,6 +1425,7 @@ const NovaApps = (() => {
           else if (a === "restore") selRestore();
           else if (a === "del") selDel();
         });
+        syncSelMarks();
       };
       const bindTop = () => {
         root.querySelectorAll("#gal-nav [data-tab]").forEach(b => b.onclick = () => { cat = null; q = ""; viewTab = b.dataset.tab; selMode = false; sel = []; draw(); });
@@ -1312,6 +1436,20 @@ const NovaApps = (() => {
         const et = root.querySelector("#empty-trash"); if (et) et.onclick = emptyTrash;
         bindSelHeader();
         root.querySelectorAll("[data-mem]").forEach(el => el.onclick = () => { const mm = lastMems[+el.dataset.mem]; cat = { kind:"mem", title: mm.label, filter: () => mm.items }; draw(); });
+        // Tocco sul segno di selezione accanto a una data: prende tutte le foto di
+        // quel giorno — o le lascia, se erano già tutte scelte. Se non si era ancora
+        // in selezione, il tocco ci entra: una giornata intera con un dito solo.
+        root.querySelectorAll("[data-day]").forEach(el => {
+          el.onclick = () => {
+            const g = lastGroups[+el.dataset.day]; if (!g) return;
+            const ids = giornoIds(g);
+            if (!ids.length) return;
+            if (!selMode) { selMode = true; sel = ids.slice(); drawKeep().then(syncSelMarks); return; }
+            const allOn = ids.every(x => sel.includes(x));
+            ids.forEach(x => { const k = sel.indexOf(x); if (allOn) { if (k >= 0) sel.splice(k, 1); } else if (k < 0) sel.push(x); });
+            syncSelMarks();
+          };
+        });
       };
       const openFotoMenu = () => {
         const sheet = document.createElement("div"); sheet.className = "sheet-ov";
@@ -1378,7 +1516,7 @@ const NovaApps = (() => {
         const fav = root.querySelector("#vb-fav");
         if (fav) fav.onclick = async () => { await os.photos.patch(p.id, { fav: !p.fav }); p.fav = !p.fav; fav.classList.toggle("on", p.fav); };
         const share = root.querySelector("#vb-share");
-        if (share) share.onclick = () => os.share({ app:"gallery", image: p.data, filename:"novaos-foto", title:"Foto da NovaOS" });
+        if (share) share.onclick = () => shareItem(p);
         const ed = root.querySelector("#vb-edit");
         if (ed) ed.onclick = () => openEditor(p);
         const trash = root.querySelector("#vb-trash");
@@ -1910,8 +2048,10 @@ const NovaApps = (() => {
       const clip = t => (t.split("\n")[0]||"").slice(0,60);
 
       // ---- bridge nativo: posta reale (SMTP/IMAP) quando NovaOS è installato ----
-      const nativeMail = !!(window.NovaNative && window.NovaNative.mailConfigure);
-      const acct = () => { try { return nativeMail ? JSON.parse(window.NovaNative.mailAccount()||"{}") : { configured:false }; } catch { return { configured:false }; } };
+      // Accessore difensivo al ponte pagina↔nativo (vedi js/bridge.js).
+      const NB = () => window.NovaBridge || { has: () => false, cmd: () => false, mailAccount: () => null };
+      const nativeMail = NB().has("mailConfigure");
+      const acct = () => { try { return nativeMail ? JSON.parse(NB().mailAccount()||"{}") : { configured:false }; } catch { return { configured:false }; } };
       let syncing = false;
 
       // callback invocati dal MailBridge nativo al termine delle operazioni di rete
@@ -1944,7 +2084,7 @@ const NovaApps = (() => {
       const syncNow = () => {
         if (!nativeMail || !acct().configured || syncing) return;
         syncing = true; drawList();
-        window.NovaNative.mailFetch("INBOX", 25);
+        NB().cmd("mailFetch", "INBOX", 25);
       };
 
       const drawList = () => {
@@ -2094,12 +2234,12 @@ const NovaApps = (() => {
             os.notify({ app:"mail", title:"Mail", text:"Compila server IMAP, SMTP e password." }); return;
           }
           cfg.name = payload.name || cfg.name; cfg.email = email || cfg.email; saveCfg();
-          window.NovaNative.mailConfigure(JSON.stringify(payload));
+          NB().cmd("mailConfigure", JSON.stringify(payload));
           os.notify({ app:"mail", title:"Mail", text:"Account collegato. Sincronizzo…" });
           drawList(); syncNow();
         };
         const disc = root.querySelector("#c-disc");
-        if (disc) disc.onclick = async () => { if(await os.confirm({title:"Scollegare l'account?",message:"La password cifrata verrà rimossa dal dispositivo.",okText:"Scollega"})){ window.NovaNative.mailClear(); os.notify({ app:"mail", title:"Mail", text:"Account scollegato." }); drawSettings(); } };
+        if (disc) disc.onclick = async () => { if(await os.confirm({title:"Scollegare l'account?",message:"La password cifrata verrà rimossa dal dispositivo.",okText:"Scollega"})){ NB().cmd("mailClear"); os.notify({ app:"mail", title:"Mail", text:"Account scollegato." }); drawSettings(); } };
         root.querySelector("#c-read").onclick = () => { box.inbox.forEach(m=>m.read=true); save(); os.notify({ app:"mail", title:"Mail", text:"Tutte le email segnate come lette." }); };
         root.querySelector("#c-empty").onclick = async () => { if(await os.confirm({title:"Svuotare il cestino?",message:"I messaggi nel cestino verranno eliminati definitivamente.",okText:"Svuota"})){ box.trash=[]; save(); os.notify({ app:"mail", title:"Mail", text:"Cestino svuotato." }); drawSettings(); } };
       };
@@ -2202,7 +2342,7 @@ const NovaApps = (() => {
             if (draftId) box.drafts = box.drafts.filter(x=>x.id!==draftId);   // la bozza inviata sparisce
             save();
             if (real) {                                        // invio SMTP reale (il MailBridge conferma via NovaMail.onSent)
-              window.NovaNative.mailSend(JSON.stringify({ to:f.to, subj:f.subj, body:bodyTxt }));
+              NB().cmd("mailSend", JSON.stringify({ to:f.to, subj:f.subj, body:bodyTxt }));
               os.notify({ app:"mail", title:"Mail", text:"Invio in corso a "+f.to+"…" });
             } else {
               os.notify({ app:"mail", title:"Mail", text:"Messaggio inviato a "+f.to });
@@ -3115,24 +3255,27 @@ const NovaApps = (() => {
     render(root, os) {
       const S = os.state;
       // ---- ponte hardware reale (presente solo dentro l'app NovaOS su Android) ----
-      const NN = window.NovaNative || {};
-      const hasSensors = !!NN.sensorStates;
-      const readSensors = () => { try { return NN.sensorStates ? JSON.parse(NN.sensorStates()) : null; } catch { return null; } };
+      // Accessore difensivo al ponte pagina↔nativo (vedi js/bridge.js).
+      const NB = () => window.NovaBridge || { has: () => false, cmd: () => false, sensorStates: () => null, appVersion: () => null, isDialer: () => null };
+      const hasSensors = NB().has("sensorStates");
+      const readSensors = () => { try { const j = NB().sensorStates(); return j ? JSON.parse(j) : null; } catch { return null; } };
       // specchia nello stato della shell i valori VERI letti dall'hardware
       const syncSensors = () => { const ns = readSensors(); if (!ns) return null;
         ["wifi","bt","nfc","location","airplane"].forEach(k => { if (k in ns) S[k] = ns[k]; }); return ns; };
       // toggle sensori: prova l'azione reale (diretta se privilegiato nel ROM,
       // altrimenti apre il pannello) e ridisegna con lo stato aggiornato
       const SETFN = { wifi:"setWifi", bt:"setBluetooth", airplane:"setAirplane", location:"setLocation", nfc:"setNfc", mobileData:"setMobileData" };
-      const sensorAct = (k, redraw) => { let applied=false;
-        try { const fn = SETFN[k]; if (fn && NN[fn]) applied = NN[fn](!S[k]); } catch (e) {}
-        setTimeout(redraw, applied ? 300 : 800); };
+      // esito a tre stati: true = applicato · false = rifiutato · null = esito non ancora
+      // noto (ponte a messaggi) → si ridisegna col tempo lungo, come quando è rifiutato.
+      const sensorAct = (k, redraw) => { let applied = null;
+        try { const fn = SETFN[k]; if (fn && NB().has(fn)) { const r = NB()[fn](!S[k]); applied = (r === true || r === false) ? r : null; } } catch (e) {}
+        setTimeout(redraw, applied === true ? 300 : 800); };
       const isPriv = () => { const ns = readSensors(); return !!(ns && ns.privileged); };
       // versione REALE in esecuzione: la più recente tra l'APK nativo (PackageInfo) e la
       // shell aggiornata via OTA (window.__NOVA_SHELL). Senza questo, dopo un aggiornamento
       // della sola interfaccia le Info restavano ferme alla build dell'APK. Stessa logica
       // dell'updater (build effettiva = max(apk, shell)).
-      const appVer = (() => { try { return NN.appVersion ? JSON.parse(NN.appVersion()) : null; } catch { return null; } })();
+      const appVer = (() => { try { const j = NB().appVersion(); return j ? JSON.parse(j) : null; } catch { return null; } })();
       const shellVer = (() => { try { return (window.__NOVA_SHELL && window.__NOVA_SHELL.build) ? window.__NOVA_SHELL : null; } catch { return null; } })();
       const apkCode = (appVer && appVer.code) || 0;
       const shellBuild = (shellVer && shellVer.build) || 0;
@@ -3162,7 +3305,7 @@ const NovaApps = (() => {
           <div class="group">
             ${row("net","📶","#0a84ff","Rete e Internet", S.airplane?"Modalità aereo":(S.wifi?("Wi-Fi · "+S.wifiName):"Wi-Fi disattivato"))}
             ${row("connected","🔗","#0a84ff","Dispositivi connessi", (S.bt?"Bluetooth attivo":"Bluetooth off")+(S.nfc?" · NFC":""))}
-            ${row("tel","📞","#30d158","Telefono predefinito", (NN.isDialer&&NN.isDialer()) ? "NovaOS è il telefono predefinito" : "Non impostato")}
+            ${row("tel","📞","#30d158","Telefono predefinito", (NB().has("isDialer") && NB().isDialer() === true) ? "NovaOS è il telefono predefinito" : "Non impostato")}
           </div>
 
           <div class="section-label">Personalizzazione</div>
@@ -3231,7 +3374,7 @@ const NovaApps = (() => {
               <button class="btn ghost" id="net-refresh" style="margin:14px 16px 4px">🔄 Aggiorna stato</button>
               <div style="padding:0 16px 20px;color:var(--text-dim);font-size:calc(11px*var(--fscale,1));word-break:break-all">Diagnostica hardware: ${raw}</div>`;
             sec.querySelectorAll("[data-sens]").forEach(el => el.onclick = () => sensorAct(el.dataset.sens, () => sections.net()));
-            sec.querySelectorAll("[data-open]").forEach(el => el.onclick = () => { try { NN.openSetting(el.dataset.open); } catch {} });
+            sec.querySelectorAll("[data-open]").forEach(el => el.onclick = () => { NB().cmd("openSetting", el.dataset.open); });
             sec.querySelector("#net-refresh").onclick = () => sections.net();
             return;
           }
@@ -3278,7 +3421,7 @@ const NovaApps = (() => {
               <button class="btn ghost" id="conn-refresh" style="margin:14px 16px 4px">🔄 Aggiorna stato</button>
               <div style="padding:0 16px 20px;color:var(--text-dim);font-size:calc(11px*var(--fscale,1));word-break:break-all">${priv?'✓ Integrato · ':''}Diagnostica hardware: ${raw}</div>`;
             sec.querySelectorAll("[data-sens]").forEach(el => el.onclick = () => sensorAct(el.dataset.sens, () => sections.connected()));
-            sec.querySelectorAll("[data-open]").forEach(el => el.onclick = () => { try { NN.openSetting(el.dataset.open); } catch {} });
+            sec.querySelectorAll("[data-open]").forEach(el => el.onclick = () => { NB().cmd("openSetting", el.dataset.open); });
             sec.querySelector("#conn-refresh").onclick = () => sections.connected();
             return;
           }
@@ -3301,7 +3444,7 @@ const NovaApps = (() => {
 
         // ---------------- Telefono predefinito ----------------
         tel: () => nav("Telefono predefinito", sec => {
-          const active = !!(NN.isDialer && NN.isDialer());
+          const active = NB().has("isDialer") && NB().isDialer() === true;
           sec.innerHTML = `
             <div class="group" style="padding:14px 16px;font-size:calc(13px*var(--fscale,1));line-height:1.55;color:${active?'var(--ok)':'var(--text-dim)'}">
               ${active ? "✓ NovaOS è il telefono predefinito: le chiamate in arrivo si aprono nella schermata di NovaOS (InCallService)."
@@ -3315,8 +3458,8 @@ const NovaApps = (() => {
             <div style="padding:0 16px 20px;font-size:calc(11px*var(--fscale,1));color:var(--text-dim)">Con la ROM il ruolo è concesso di sistema. La schermata di chiamata si prova comunque dal Telefono (tasto verde) anche senza: in preview simula la chiamata.</div>`;
           sec.querySelector("[data-dialer]").onclick = () => {
             if (active) { os.notify({ app:"settings", title:"Telefono predefinito", text:"NovaOS è già il telefono predefinito." }); return; }
-            if (NN.requestDialerRole) { try { NN.requestDialerRole(); } catch (e) {} }
-            else os.notify({ app:"settings", title:"Telefono predefinito", text:"Disponibile solo nell'app NovaOS su Android." });
+            if (!NB().cmd("requestDialerRole"))
+              os.notify({ app:"settings", title:"Telefono predefinito", text:"Disponibile solo nell'app NovaOS su Android." });
           };
         }),
 
@@ -3706,7 +3849,7 @@ const NovaApps = (() => {
           const locSens = sec.querySelector('[data-sens="location"]');
           if (locSens) locSens.onclick = () => sensorAct("location", () => sections.privacy());
           else { const lsw = sec.querySelector(".switch"); if (lsw) lsw.onclick = () => { os.toggle("location"); sections.privacy(); }; }
-          sec.querySelectorAll("[data-open]").forEach(el => el.onclick = () => { try { NN.openSetting(el.dataset.open); } catch {} });
+          sec.querySelectorAll("[data-open]").forEach(el => el.onclick = () => { NB().cmd("openSetting", el.dataset.open); });
           sec.querySelector("#clear-nav").onclick = async () => {
             if (!await os.confirm({title:"Cancellare i dati di navigazione?",message:"Cronologia e preferiti del Browser verranno cancellati.",okText:"Cancella"})) return;
             os.store.del("browserHistory"); os.store.del("bookmarks");
@@ -3797,9 +3940,8 @@ const NovaApps = (() => {
             const up = info.hasUpdate;
             // aggiornamento della SOLA interfaccia (shell HTML/JS/CSS) applicabile a caldo,
             // senza reinstallare l'APK: serve il bridge nativo e una build nativa adeguata.
-            const nn = window.NovaNative;
             const otaShell = up && info.files && info.files.length
-              && nn && nn.shellWrite && nn.shellCommit
+              && NB().has("shellWrite") && NB().has("shellCommit")
               && (!info.minNative || info.nativeBuild >= info.minNative);
             const needsApk = up && !otaShell;
             sub.textContent = up ? `NovaOS ${info.currentName} · aggiornamento disponibile` : `NovaOS ${info.currentName} · aggiornato`;
@@ -3818,7 +3960,7 @@ const NovaApps = (() => {
             if (ins) ins.onclick = async () => {
               ins.disabled = true; ins.textContent = "Avvio aggiornamento…";
               if (os.updater.last && os.updater.last.files && os.updater.last.files.length
-                  && window.NovaNative && window.NovaNative.shellWrite
+                  && NB().has("shellWrite")
                   && (!os.updater.last.minNative || os.updater.last.nativeBuild >= os.updater.last.minNative)) {
                 panel.innerHTML = `<div style="color:var(--text-dim);font-size:calc(13px*var(--fscale,1));padding:6px 0"><span class="spin" style="display:inline-block;width:14px;height:14px;vertical-align:middle;margin-right:8px"></span>Scarico e applico l'interfaccia aggiornata…</div>`;
               }
@@ -3833,7 +3975,7 @@ const NovaApps = (() => {
           doCheck();   // controllo automatico all'apertura della sezione
           sec.querySelector("#reset").onclick = async () => { if (await os.confirm({title:"Ripristino di fabbrica?",message:"Verranno cancellati impostazioni e app installate. L'operazione non è reversibile.",okText:"Ripristina"})) os.factoryReset(); };
           // Data e ora / Lingua: aprono i pannelli reali di sistema (sul dispositivo)
-          sec.querySelectorAll("[data-open]").forEach(el => el.onclick = () => { try { NN.openSetting(el.dataset.open); } catch {} });
+          sec.querySelectorAll("[data-open]").forEach(el => el.onclick = () => { NB().cmd("openSetting", el.dataset.open); });
           // Backup reale: esporta i dati nova:* come file JSON, ripristina da file.
           const bkName = () => `novaos-backup-${new Date().toISOString().slice(0,10)}.json`;
           const bkJson = () => JSON.stringify({ format:"novaos-backup/1", date:new Date().toISOString(), data: os.backup() }, null, 2);
@@ -3843,9 +3985,8 @@ const NovaApps = (() => {
             const json = bkJson(); const n = Object.keys(os.backup()).length;
             // salva SEMPRE una copia interna → visibile/ripristinabile dal File Manager
             try { os.backupSaveInternal(bkName(), json); } catch {}
-            const nn = window.NovaNative;
-            if (nn && nn.saveDownload) {           // sul dispositivo: salva in Download
-              let path = ""; try { path = nn.saveDownload(bkName(), b64utf8(json)); } catch {}
+            if (NB().has("saveDownload")) {       // sul dispositivo: salva in Download
+              let path = ""; try { path = (await NB().saveDownload(bkName(), b64utf8(json))) || ""; } catch {}
               os.notify({ app:"settings", title:"Backup", text: path ? `Backup in ${path} e nel File Manager (${n} voci).` : "Backup non riuscito." });
             } else {                                // desktop/PWA: download del file
               try {
@@ -3924,7 +4065,7 @@ const NovaApps = (() => {
             ["⬆️","Aggiornamenti","In Impostazioni → Sistema → «Aggiornamenti» controlli e installi le novità. Gli aggiornamenti della sola interfaccia si applicano subito («Aggiorna ora»); quelli che toccano le funzioni di sistema richiedono la reinstallazione dell'app."],
             ["🔒","Blocco e sicurezza","In Impostazioni → «Sicurezza e blocco» imposti PIN o sblocco a scorrimento e la schermata di blocco. Il dispositivo si blocca da solo dopo un periodo di inattività."],
           ];
-          const openUrl = u => { const nn = window.NovaNative; if (nn && nn.openBrowser) { try { nn.openBrowser(u); return; } catch(e){} } try { window.open(u, "_blank"); } catch(e){} };
+          const openUrl = u => { if (NB().cmd("openBrowser", u)) return; try { window.open(u, "_blank"); } catch(e){} };
           const REPO = "https://github.com/RedRider21/NovaOS";
           sec.innerHTML = `
             <div style="padding:6px 16px 4px;color:var(--text-dim);font-size:calc(13px*var(--fscale,1))">Guida rapida a NovaOS ${VER}. Tocca un argomento per i dettagli.</div>
@@ -4050,7 +4191,9 @@ const NovaApps = (() => {
       };
 
       const setState = (txt) => { const e = root.querySelector("#rec-state"); if (e) e.textContent = txt; };
-      const micDiag = () => { try { return window.NovaNative && window.NovaNative.micDiag ? window.NovaNative.micDiag() : "granted"; } catch { return "granted"; } };
+      // Accessore difensivo al ponte pagina↔nativo (vedi js/bridge.js).
+      const NB = () => window.NovaBridge || { has: () => false, cmd: () => false, micDiag: () => "granted", audioRecStart: () => false, audioRecStop: () => "" };
+      const micDiag = () => { try { return NB().has("micDiag") ? NB().micDiag() : "granted"; } catch { return "granted"; } };
       const showMicWarn = () => {
         const w = root.querySelector("#mic-warn"), txt = root.querySelector("#mic-warn-txt"), go = root.querySelector("#mic-go");
         if (!w) return;
@@ -4070,7 +4213,7 @@ const NovaApps = (() => {
 
       // su device usa il registratore audio NATIVO (la WebView spesso non cattura
       // il microfono via getUserMedia); in emulatore/browser ripiega su MediaRecorder web.
-      const nativeAudio = !!(window.NovaNative && window.NovaNative.audioRecStart);
+      const nativeAudio = NB().has("audioRecStart");
       const beginUI = () => {
         recording = true; t0 = Date.now();
         const btn = root.querySelector("#rec-btn"); if (btn) { btn.style.borderRadius = "20px"; btn.style.transform = "scale(.9)"; }
@@ -4094,7 +4237,7 @@ const NovaApps = (() => {
         // 1) via WEB standard (getUserMedia + MediaRecorder) — è così che funzionerà
         //    sulla ROM Gecko/Firefox OS finale, dove il runtime espone il microfono.
         try {
-          try { window.NovaNative && window.NovaNative.requestMic && window.NovaNative.requestMic(); } catch {}
+          NB().cmd("requestMic");
           stream = await navigator.mediaDevices.getUserMedia({ audio:true });
           const cand = ["audio/webm;codecs=opus","audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/webm","audio/ogg;codecs=opus"];
           const mime = cand.find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || "";
@@ -4113,8 +4256,8 @@ const NovaApps = (() => {
         // 2) ripiego sul layer del runtime (questa WebView non cattura il microfono):
         //    è lo stesso ruolo che avrebbe Gecko in Firefox OS, qui fornito da NovaNative.
         if (nativeAudio) {
-          let ok = false; try { ok = window.NovaNative.audioRecStart(); } catch {}
-          if (ok) { usedNative = true; beginUI(); return; }
+          let ok = false; try { ok = await NB().audioRecStart(); } catch {}
+          if (ok === true) { usedNative = true; beginUI(); return; }
         }
         showMicWarn(true);
       };
@@ -4124,7 +4267,7 @@ const NovaApps = (() => {
         endUI();
         if (usedNative) {
           let dataUrl = "";
-          try { dataUrl = window.NovaNative.audioRecStop() || ""; } catch {}
+          try { dataUrl = (await NB().audioRecStop()) || ""; } catch {}
           if (dataUrl) await saveRec(dataUrl, dur); else setState("Registrazione non riuscita");
           return;
         }
@@ -4140,8 +4283,8 @@ const NovaApps = (() => {
           const w = root.querySelector("#mic-warn");
           const act = w && w.dataset.act;
           if (act === "retry") { hideMicWarn(); start(); return; }
-          if (act === "blocked") { try { window.NovaNative && window.NovaNative.openAppSettings && window.NovaNative.openAppSettings(); } catch {} return; }
-          try { window.NovaNative && window.NovaNative.requestMic && window.NovaNative.requestMic(); } catch {}
+          if (act === "blocked") { NB().cmd("openAppSettings"); return; }
+          NB().cmd("requestMic");
         };
         const audio = root.querySelector("#rec-audio");
         const durOf = (fallback) => (isFinite(audio.duration) && audio.duration > 0) ? audio.duration : fallback;

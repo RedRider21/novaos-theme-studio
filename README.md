@@ -6,6 +6,9 @@ della **shell reale** di NovaOS (`shell/`) pubblicate fianco a fianco. Si pubbli
 web qualunque): **niente Python, niente server, zero build** — solo file da servire.
 
 Generata con `./build-static.sh` dalla radice di `novaos-theme-studio/`.
+Lo snapshot attuale è allineato a **NovaOS 0.1.60 build 62**: 16 app, 8 launcher
+(springboard, list, drawer, tiles, dash, radial, cover, index + layout a blocchi) e
+sfondo immagine con inquadratura/zoom/posizione.
 
 ## Pubblicare
 
@@ -52,5 +55,5 @@ dist/
 └── .nojekyll             (solo per GitHub Pages)
 ```
 
-La shell è una **copia** di `../web-phone-os/shell` al momento della build:
+La shell è una **copia** di `../os/shell` al momento della build:
 se NovaOS avanza, rigenera la dist con `./build-static.sh`.
