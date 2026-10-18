@@ -1,8 +1,9 @@
 # Integrazione lato NovaOS (motore temi)
 
-Questo documento descrive cosa aggiungere **dentro NovaOS** (`web-phone-os/shell/`) per
+Questo documento descrive cosa aggiungere **dentro NovaOS** (`os/shell/`) per
 consumare un pacchetto `.novatheme`. Lo Studio (questo repo) produce il pacchetto; il
-motore qui descritto lo applica. Tenere i due lati allineati al `format: "novatheme/1"`.
+motore qui descritto lo applica. Tenere i due lati allineati al `format: "novatheme/2"`
+(il motore accetta ancora `novatheme/1` per compatibilità).
 
 ## 1. `applyTheme(theme)` in `os.js`
 
@@ -19,8 +20,12 @@ function applyTheme(t) {
   if (t.shape?.radius   != null) rs.setProperty("--radius", t.shape.radius + "px");
   if (t.shape?.radiusSm != null) rs.setProperty("--radius-sm", t.shape.radiusSm + "px");
   if (t.shape?.iconStyle) set("iconStyle", t.shape.iconStyle);
-  // sfondo
-  if (t.wallpaper) applyWallpaper(t.wallpaper);      // gradient|image|solid su #home
+  if (t.shape?.iconShape) set("iconShape", t.shape.iconShape);  // circle|squircle|square
+  // launcher (novatheme/2): id predefinito oppure layout a blocchi
+  if (t.layout?.engine === "blocks") applyThemeLayout(t.layout);
+  else if (t.layout?.id) set("launcher", t.layout.id);
+  // sfondo: gradient | solid | image (+ fit/zoom/posX/posY)
+  if (t.wallpaper) applyWallpaper(t.wallpaper);      // su #home
   // tipografia
   if (t.typography?.textScale) set("textScale", t.typography.textScale);
   // icone per app -> override (vedi os.updateApp / mappa runtime)
@@ -59,17 +64,26 @@ Aggiungere una sezione con:
   "Backup dati").
 - **Applica / Ripristina**: applica un tema salvato o torna al tema di fabbrica.
 - Eventuale **galleria temi** scaricabili dal repo via lo stesso canale OTA
-  (`raw.githubusercontent.com/dPlusOS21/NovaOS/main/shell/themes/...`).
+  (`raw.githubusercontent.com/RedRider21/NovaOS/main/themes/<nome>.novatheme.json`;
+  la shell legge già il catalogo da `.../main/themes/catalog.json`).
 
 ## 5. Validazione
 
 Riusare `schema/theme.schema.json`. In assenza di un validatore JSON-Schema completo lato
-shell, fare almeno controlli minimi: `format === "novatheme/1"`, `meta.id`, colori come
-esadecimali, tipi degli enum. Rifiutare con messaggio chiaro invece di applicare a metà.
+shell, fare almeno controlli minimi: `format` uguale a `"novatheme/1"` o `"novatheme/2"`,
+`meta.id`, colori come esadecimali, tipi degli enum. Rifiutare con messaggio chiaro invece
+di applicare a metà.
+
+Per un launcher a blocchi (`layout.engine === "blocks"`) verificare che `blocks` sia un
+array non vuoto e che ogni blocco abbia un `type` noto; per uno predefinito verificare che
+`layout.id` sia tra i 6 storici (`springboard`, `list`, `drawer`, `tiles`, `dash`,
+`radial`) più `cover`, `index` e il motore `blocks` (launcher «Personalizzato»).
 
 ## 6. Compatibilità ROM
 
 Nella ROM definitiva la shell risiederà in una directory di sistema scrivibile (stesso
 modello dell'OTA-shell già implementato: `MainActivity.resolveShellUrl()` +
-`shellWrite/shellCommit`). I temi seguono lo stesso canale: file sotto `shell/themes/`,
-importabili/scaricabili senza reinstallare nulla.
+`shellWrite/shellCommit`). I temi seguono lo stesso canale: file sotto `shell/themes/`
+(nel repo `themes/` accanto a `shell/`), importabili/scaricabili senza reinstallare nulla.
+Nel pacchetto `.novatheme/2` l'unica parte che non cambia mai è l'insieme delle app: il
+tema può solo scegliere come disporle (`layout`) e come vestirle (colori, icone, suoni).

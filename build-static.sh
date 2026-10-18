@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Genera dist/ : la build statica distribuita dello Studio.
 # Pubblica studio/ e gallery/ fianco a fianco con una copia della shell reale
-# (../web-phone-os/shell), così l'anteprima «Reale» funziona anche su un hosting
+# (../os/shell), così l'anteprima «Reale» funziona anche su un hosting
 # statico, senza il server.py. Rigenera sempre: cancella dist/ e ricopia.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 OUT=dist
-SHELL_SRC="../web-phone-os/shell"
+SHELL_SRC="../os/shell"
 
 rm -rf "$OUT"
 mkdir -p "$OUT"

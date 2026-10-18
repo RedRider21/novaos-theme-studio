@@ -14,7 +14,7 @@ import os, sys, json, time, threading, posixpath
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-SHELL = os.path.abspath(os.path.join(ROOT, "..", "web-phone-os", "shell"))
+SHELL = os.path.abspath(os.path.join(ROOT, "..", "os", "shell"))
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8099
 
 # per lo sviluppo non vogliamo cache: l'anteprima ricarica sempre i file freschi

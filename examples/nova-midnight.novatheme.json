@@ -1,5 +1,5 @@
 {
-  "format": "novatheme/1",
+  "format": "novatheme/2",
   "meta": {
     "id": "nova-midnight",
     "name": "Nova Midnight",
@@ -19,10 +19,14 @@
     "danger": "#ff5b6e",
     "ok": "#35d0a0"
   },
+  "layout": {
+    "id": "springboard"
+  },
   "shape": {
     "radius": 22,
     "radiusSm": 14,
-    "iconStyle": "filled"
+    "iconStyle": "filled",
+    "iconShape": "squircle"
   },
   "wallpaper": {
     "type": "gradient",

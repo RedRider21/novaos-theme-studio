@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://novaos/theme.schema.json",
   "title": "NovaOS Theme Package",
-  "description": "Formato .novatheme (1 o 2) — pacchetto tema/interfaccia per NovaOS. La versione 2 aggiunge il campo 'layout' (launcher della home).",
+  "description": "Formato .novatheme (1 o 2) — pacchetto tema/interfaccia per NovaOS. La versione 2 aggiunge il campo 'layout' (launcher della home, anche a blocchi).",
   "type": "object",
   "required": ["format", "meta", "colors"],
   "additionalProperties": false,
@@ -10,13 +10,23 @@
     "format": { "enum": ["novatheme/1", "novatheme/2"] },
     "layout": {
       "type": "object",
-      "description": "novatheme/2 — paradigma della home (launcher provider). Le app non cambiano.",
-      "required": ["id"],
+      "description": "novatheme/2 — paradigma della home. Due forme: launcher predefinito ({id, params, order}) oppure layout a blocchi ({engine:'blocks', name, blocks}). Le app non cambiano.",
       "additionalProperties": false,
       "properties": {
-        "id":     { "type": "string", "description": "id del launcher: springboard | list | drawer | tiles | dash | radial | cover | …" },
-        "params": { "type": "object", "description": "parametri specifici del launcher" }
-      }
+        "id":     { "type": "string", "description": "id del launcher: springboard | list | drawer | tiles | dash | radial | cover | index" },
+        "params": { "type": "object", "description": "parametri specifici del launcher" },
+        "order":  { "type": "array", "description": "ordine personalizzato delle app (id)", "items": { "type": "string" } },
+        "engine": { "enum": ["blocks"], "description": "motore generico a blocchi (launcher «Personalizzato»)" },
+        "name":   { "type": "string", "description": "nome mostrato per il layout a blocchi" },
+        "blocks": { "type": "array", "description": "blocchi della home (engine='blocks')", "minItems": 1, "items": { "$ref": "#/$defs/block" } }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "engine": { "const": "blocks" } }, "required": ["engine"] },
+          "then": { "required": ["blocks"] },
+          "else": { "required": ["id"] }
+        }
+      ]
     },
     "meta": {
       "type": "object",
@@ -44,7 +54,8 @@
         "accent":    { "$ref": "#/$defs/color" },
         "accent-2":  { "$ref": "#/$defs/color" },
         "danger":    { "$ref": "#/$defs/color" },
-        "ok":        { "$ref": "#/$defs/color" }
+        "ok":        { "$ref": "#/$defs/color" },
+        "icon":      { "$ref": "#/$defs/color", "description": "colore delle icone monocromatiche" }
       }
     },
     "shape": {
@@ -53,7 +64,8 @@
       "properties": {
         "radius":    { "type": "number", "minimum": 0, "maximum": 48 },
         "radiusSm":  { "type": "number", "minimum": 0, "maximum": 32 },
-        "iconStyle": { "enum": ["filled", "outline"] }
+        "iconStyle": { "enum": ["filled", "outline"] },
+        "iconShape": { "enum": ["circle", "squircle", "square"], "description": "forma della tessera icona" }
       }
     },
     "wallpaper": {
@@ -62,7 +74,11 @@
       "additionalProperties": false,
       "properties": {
         "type":  { "enum": ["gradient", "image", "solid"] },
-        "value": { "type": "string", "minLength": 1 }
+        "value": { "type": "string", "minLength": 1 },
+        "fit":   { "enum": ["cover", "contain", "custom"], "description": "inquadratura (solo type=image)" },
+        "zoom":  { "type": "number", "minimum": 60, "maximum": 260, "description": "zoom percentuale (solo fit=custom)" },
+        "posX":  { "type": "number", "minimum": 0, "maximum": 100, "description": "posizione orizzontale percentuale (solo type=image)" },
+        "posY":  { "type": "number", "minimum": 0, "maximum": 100, "description": "posizione verticale percentuale (solo type=image)" }
       }
     },
     "icons": {
@@ -91,7 +107,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "textScale": { "type": "number", "minimum": 80, "maximum": 140 },
+        "textScale": { "type": "number", "minimum": 80, "maximum": 130 },
         "font": { "enum": ["system", "serif", "mono"] },
         "weight": { "enum": ["normal", "medium", "bold"] }
       }
@@ -101,6 +117,15 @@
     "color": {
       "type": "string",
       "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+    },
+    "block": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type":   { "type": "string", "description": "clock | weather | bubbles | dock | appgrid | appindex | …" },
+        "params": { "type": "object" }
+      }
     },
     "icon": {
       "type": "object",

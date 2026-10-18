@@ -1,7 +1,7 @@
 # NovaOS Theme Studio
 
 Ambiente **esterno** e autonomo per creare interfacce/temi personalizzati per
-[NovaOS](https://github.com/dPlusOS21/NovaOS) — come fanno gli icon-pack e i temi dei
+[NovaOS](https://github.com/RedRider21/NovaOS) — come fanno gli icon-pack e i temi dei
 launcher Android, ma tutto in HTML5/JS e **senza dipendenze esterne**.
 
 Questo repository è il **progetto companion** deciso durante lo sviluppo di NovaOS: il
@@ -10,9 +10,11 @@ progettisti e terze parti costruiscono un tema, lo vedono in anteprima dal vivo 
 esportano come pacchetto `.novatheme` che qualsiasi NovaOS può importare e applicare.
 
 > **Stato: editor visuale completo** con anteprima **dal vivo e interattiva**. Lo Studio
-> copre identità, launcher, colori, icone (icon-pack + override), sfondo, suoni, tipografia;
-> valida il tema e lo esporta/importa come `.novatheme/2`. L'editor ha **annulla/rifai,
-> salvataggio automatico e miniatura dal vivo**. La novità principale è
+> copre identità, launcher (tutti gli **8 paradigmi** di NovaOS + layout a blocchi), colori,
+> icone (icon-pack + override), sfondo (gradiente, tinta unita o **immagine** con
+> riempi/adatta/zoom e posizione), suoni, tipografia; valida il tema e lo esporta/importa
+> come `.novatheme/2`. L'editor ha **annulla/rifai, salvataggio automatico e miniatura dal
+> vivo**. Allineato a **NovaOS 0.1.60** (build 62). La novità principale è
 > l'**anteprima «Reale»**: carica la shell vera di NovaOS in un iframe e la pilotata via
 > `postMessage`, quindi ogni interazione funziona davvero — il Drawer si apre cliccando
 > l'icona ☰, i launcher si cambiano al volo, le app si avviano. In più, il pannello
@@ -56,9 +58,13 @@ include asset binari come immagini/icone). Schema completo in
 
 ```jsonc
 {
-  "format": "novatheme/1",
+  "format": "novatheme/2",
   "meta":   { "id": "nova-midnight", "name": "Nova Midnight",
               "author": "Studio", "version": "1.0.0", "base": "dark" },
+
+  // novatheme/2: launcher predefinito ({id, params, order}) oppure layout a blocchi
+  "layout": { "id": "springboard", "params": {}, "order": ["phone","messages"] },
+  // in alternativa: { "engine": "blocks", "name": "Bolle", "blocks": [ … ] }
 
   // variabili CSS del tema (mappano 1:1 le --var di NovaOS)
   "colors": {
@@ -67,11 +73,14 @@ include asset binari come immagini/icone). Schema completo in
     "accent": "#6d8bff", "accent-2": "#a663ff", "danger": "#ff5b6e", "ok": "#35d0a0"
   },
 
-  "shape":  { "radius": 22, "radiusSm": 14, "iconStyle": "filled" },  // filled | outline
+  "shape":  { "radius": 22, "radiusSm": 14, "iconStyle": "filled", "iconShape": "squircle" },
+  // iconStyle: filled | outline · iconShape: circle | squircle | square
 
   "wallpaper": { "type": "gradient", "value": "radial-gradient(130% 80% at 50% 0%, #3c5fa5 0%, transparent 58%)" },
-  // oppure { "type": "image", "value": "data:image/webp;base64,..." }
   // oppure { "type": "solid",  "value": "#0b0f17" }
+  // oppure { "type": "image",  "value": "data:image/jpeg;base64,...",
+  //          "fit": "cover", "zoom": 100, "posX": 50, "posY": 50 }
+  // fit: cover (riempi) | contain (adatta) | custom (zoom 60–260%)
 
   "icons": {
     "pack": "bootstrap",       // riferimento all'icon-pack usato (info per lo Studio)
@@ -182,6 +191,11 @@ novaos-theme-studio/
   icone; viene esportato nel tema come `{type:"svg"}` per-app e si può anche **pasticciare un
   SVG proprio** (override «SVG…»). La shell applica gli SVG convertendoli in data-URL immagine
   (mai HTML raw → nessuna iniezione) e li mostra in home e in **tutti** i launcher.
+- **Sfondo immagine completo** — nel pannello Sfondo si carica un'immagine (ridotta a lato max
+  1080 px, JPEG) che viene salvata **dentro il tema** come data URL, esattamente come fa NovaOS
+  in Impostazioni → Display → Sfondo. Si sceglie l'inquadratura **Riempi / Adatta / Zoom**
+  (60–260%) e la posizione orizzontale/verticale; l'anteprima «Modello» e quella «Reale»
+  mostrano lo stesso risultato, e il pacchetto esportato conserva `fit`, `zoom`, `posX`, `posY`.
 - Editor completo (identità, launcher, colori, icone, sfondo, suoni, tipografia), drag per
   riordinare la griglia, validazione/QA, esporta/importa `.novatheme/2`.
 - Lato NovaOS: palette applicata al telefono, gestione temi installati, condivisione,
@@ -191,8 +205,8 @@ novaos-theme-studio/
   — reale e modello ora coincidono anche nel grassetto.
 
 **Prossimi**
-- Galleria dei launcher (7 paradigmi) integrabile nello Studio come blocco di anteprima;
-  catalogo temi/icon-pack di terze parti pubblicabile e installabile da NovaOS.
+- Catalogo temi/icon-pack di terze parti pubblicabile e installabile da NovaOS (la shell ha
+  già il negozio temi e il download da URL; manca il catalogo pubblico con più di un autore).
 
 ## Sviluppo
 
@@ -218,6 +232,10 @@ qualsiasi hosting con **una riga**:
 python3 -m http.server 8123 --directory dist   # prova locale
 # poi pubblica dist/ su GitHub Pages / Netlify / Altervista / qualsiasi hosting
 ```
+
+La copia della shell dentro `dist/shell/` è **fotografata al momento della build**: va
+rigenerata ogni volta che `os/shell/` cambia, altrimenti l'anteprima «Reale» del sito
+pubblicato mostra una versione vecchia di NovaOS.
 
 Su hosting statico l'endpoint `/theme/current` non esiste (serve `server.py`), quindi
 l'anteprima **live sul dispositivo** non è disponibile e lo Studio mostra una nota al suo
@@ -246,17 +264,19 @@ il launcher.
 }
 ```
 
-**Launcher previsti**: `springboard` (griglia + dock, default), `list` (elenco con ricerca e
-riordino per trascinamento), `drawer`, `tiles`, `dash`, `radial`, `cover`. In NovaOS oggi sono
-attivi `springboard` e `list` (selezionabili in Impostazioni → Display → *Home · launcher*);
-gli altri sono dimostrati nella galleria e via via portati nella shell reale.
+**Launcher disponibili**: `springboard` (griglia + dock, default), `list` (elenco con ricerca
+e riordino per trascinamento), `drawer`, `tiles`, `dash`, `radial`, `cover`, `index` (indice
+A-Z), più il layout **a blocchi** (`engine: "blocks"`) che in NovaOS diventa il launcher
+«Personalizzato». **Tutti e 8 i paradigmi sono attivi nella shell** (Impostazioni → Display →
+*Home · launcher*) e nello Studio, che ne offre l'anteprima dal vivo; il layout a blocchi si
+compone trascinando i blocchi nell'editor.
 
 ### Galleria launcher (anteprima interattiva)
 
-`gallery/launcher-lab.html` — un telefono NovaOS con 7 launcher intercambiabili sulle stesse
-app, accento commutabile, scorrimenti senza barra. Aprila direttamente nel browser oppure via
-`python3 -m http.server` dalla radice del repo. È la base della futura "galleria layout" dello
-Studio.
+`gallery/launcher-lab.html` — un telefono NovaOS con gli **8 launcher** intercambiabili sulle
+stesse app, accento commutabile, scorrimenti senza barra. Aprila direttamente nel browser oppure
+via `python3 -m http.server` dalla radice del repo. È la base della futura "galleria layout"
+dello Studio.
 
 ### Sfondo immagine
 
@@ -270,9 +290,10 @@ caricare un'immagine (ridimensionata a lato max 1080px, JPEG) da Impostazioni �
 ./run-studio.sh 9000     # porta personalizzata
 ```
 
-L'editor copre: identità, **launcher** (paradigmi con anteprima dal vivo), colori,
-**icone** (forma/stile, **icon-pack NovaOS/Aura/Tondo/Minimal** e override per-app:
-emoji, immagine o **SVG**), sfondo (gradiente/tinta),
+L'editor copre: identità, **launcher** (tutti gli 8 paradigmi con anteprima dal vivo + layout
+a blocchi), colori, **icone** (forma/stile, **icon-pack NovaOS/Aura/Tondo/Minimal** e override
+per-app: emoji, immagine o **SVG**), sfondo (gradiente/tinta/**immagine** con
+riempi/adatta/zoom e posizione),
 **suoni** (suoneria/notifica/sveglia con anteprima WebAudio), tipografia. Lavorare è sicuro:
 **annulla/rifai** sempre disponibili, il tema si **autosalva** nel browser e una **miniatura**
 in alto mostra il risultato dal vivo. Nella **Griglia** le icone dell'anteprima si **trascinano**

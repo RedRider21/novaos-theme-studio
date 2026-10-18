@@ -350,6 +350,20 @@
       <div class="card">
         <div class="swatches" id="f-walls"></div>
         <div class="field" style="margin-top:12px"><label>Tinta unita</label><input type="color" id="f-solid" value="#0b0f17"><button class="btn" id="f-solid-use" style="padding:7px 10px">Usa tinta</button></div>
+        <div class="field" style="margin-top:12px">
+          <label>Immagine</label>
+          <label class="btn" style="padding:7px 10px;cursor:pointer;text-align:center">Carica…
+            <input id="f-wall-img" type="file" accept="image/*" hidden>
+          </label>
+          <button class="btn" id="f-wall-clear" style="padding:7px 10px">Rimuovi</button>
+        </div>
+        <div id="f-wall-opts" style="display:none">
+          <div class="field"><label>Inquadratura</label><div class="seg" id="f-wall-fit" style="flex:2"><button data-fit="cover">Riempi</button><button data-fit="contain">Adatta</button><button data-fit="custom">Zoom</button></div></div>
+          <div class="field" id="f-wall-zoom-row"><label>Zoom · <span id="f-wall-zoom-v">100%</span></label><input type="range" id="f-wall-zoom" min="60" max="260" step="5" value="100" style="flex:1"></div>
+          <div class="field"><label>Orizz. · <span id="f-wall-px-v">50%</span></label><input type="range" id="f-wall-px" min="0" max="100" step="1" value="50" style="flex:1"></div>
+          <div class="field"><label>Vert. · <span id="f-wall-py-v">50%</span></label><input type="range" id="f-wall-py" min="0" max="100" step="1" value="50" style="flex:1"></div>
+          <p class="hint">L'immagine viene ridotta a lato max 1080 px (JPEG) e salvata dentro il tema, come fa NovaOS in Impostazioni → Display → Sfondo.</p>
+        </div>
       </div>
     </div>
 
